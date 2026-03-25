@@ -1,0 +1,62 @@
+services:
+  web:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    command: ["node", "server/app.js"]
+    env_file:
+      - ./.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 29000
+      CODEX_SWITCHER_DATA_DIR: /data
+      DB_PATH: /data/codex-switcher.db
+      AUDIT_LOG_PATH: /data/audit.log
+    volumes:
+      - ./data:/data
+      - codex-switcher-run:/run/codex-switcher
+    ports:
+      - "127.0.0.1:${WEB_BIND_PORT:-29000}:29000"
+    depends_on:
+      - agent
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    command: ["node", "server/agent.js"]
+    env_file:
+      - ./.env
+    environment:
+      CODEX_SWITCHER_DATA_DIR: /data
+      CODEX_ACTIVE_HOME: /codex-home
+      CODEX_ACTIVE_AUTH_PATH: /codex-home/auth.json
+      CODEX_AGENT_BACKUP_DIR: /data/agent
+      CODEX_BOOTSTRAP_ROOT: /data/bootstrap
+      CODEX_AGENT_SOCKET_PATH: /run/codex-switcher/agent.sock
+    volumes:
+      - ./data:/data
+      - codex-switcher-run:/run/codex-switcher
+      - codex-home:/codex-home
+    restart: unless-stopped
+
+  code-server:
+    profiles: ["bundled"]
+    build:
+      context: ./app
+      dockerfile: deploy/code-server/Dockerfile
+    environment:
+      PASSWORD: ${CODE_SERVER_PASSWORD}
+    volumes:
+      - ./workspace:/workspace
+      - codex-home:/home/coder/.codex
+      - code-server-config:/home/coder/.local/share/code-server
+    ports:
+      - "127.0.0.1:${CODE_SERVER_BIND_PORT:-17001}:8080"
+    restart: unless-stopped
+
+volumes:
+  codex-switcher-run:
+  codex-home:
+  code-server-config:

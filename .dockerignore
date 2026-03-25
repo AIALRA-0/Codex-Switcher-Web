@@ -1,0 +1,9 @@
+.git
+node_modules
+coverage
+tmp
+temp
+logs
+data
+workspace
+deploy/generated

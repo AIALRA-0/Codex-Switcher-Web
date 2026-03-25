@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex Switcher</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=20260325-5" />
+  </head>
+  <body class="is-login-mode">
+    <div class="app-shell">
+      <header class="app-header">
+        <div>
+          <p class="eyebrow" id="appEyebrow">Codex Account Console</p>
+          <h1 id="appTitle">Codex 账号管理</h1>
+        </div>
+        <div class="app-header__actions">
+          <button id="languageToggleBtn" class="ghost" type="button">语言：中文</button>
+          <button id="timeDisplayToggleBtn" class="ghost hidden" type="button">时间显示：服务器</button>
+          <button id="accountPrivacyToggleBtn" class="ghost hidden" type="button">账号隐私：关</button>
+          <div class="session-badge" id="sessionBadge">未登录</div>
+          <button id="logoutBtn" class="danger hidden" type="button">退出后台</button>
+        </div>
+      </header>
+
+      <main class="page-grid">
+        <section class="panel auth-panel" id="loginPanel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow" id="loginEyebrow">Admin Access</p>
+              <h2 id="loginTitle">管理员登录</h2>
+            </div>
+          </div>
+          <form id="loginForm" class="login-form">
+            <label>
+              <span id="loginEmailLabel">邮箱</span>
+              <input id="loginEmail" name="admin_email" type="email" autocomplete="username" autocapitalize="off" spellcheck="false" data-bwignore="true" data-1p-ignore="true" data-lpignore="true" required />
+            </label>
+            <label>
+              <span id="loginPasswordLabel">密码</span>
+              <input id="loginPassword" name="admin_password" type="password" autocomplete="current-password" data-bwignore="true" data-1p-ignore="true" data-lpignore="true" required />
+            </label>
+            <button id="loginSubmitBtn" type="submit" class="primary">登录</button>
+          </form>
+        </section>
+
+        <section class="dashboard hidden" id="dashboardPanel">
+          <section class="panel">
+            <div class="topbar">
+              <div>
+                <h2 id="dashboardTitle">管理台</h2>
+                <p class="muted" id="runtimeTimestamp">等待数据...</p>
+              </div>
+              <div class="topbar-note" id="autoRefreshNote">打开页面会立即刷新，页面保持打开时每 30 秒刷新一次</div>
+            </div>
+
+            <div class="guide-strip">
+              <span class="guide-step" id="guideStepSave">保存资料</span>
+              <span class="guide-step" id="guideStepAuth">认证账号</span>
+              <span class="guide-step" id="guideStepSwitch">切换使用</span>
+              <span class="guide-step" id="guideStepLogout">退出留存</span>
+            </div>
+
+            <div id="workspaceGuideHost"></div>
+
+            <div class="summary-grid" id="summaryGrid"></div>
+
+            <div class="active-section">
+              <div class="section-head">
+                <div>
+                  <h3 id="activeSectionTitle">当前使用</h3>
+                  <p class="muted" id="activeSectionHint">只有点击“切换”时，code-server 的 Codex 才会换号</p>
+                </div>
+                <div class="inline-badge" id="quotaSourceBadge">等待同步</div>
+              </div>
+              <div id="activeSlotCard" class="current-account"></div>
+            </div>
+          </section>
+
+          <article class="panel accounts-panel">
+            <div class="section-head">
+              <div>
+                <h3 id="accountsSectionTitle">账号列表</h3>
+                <p class="muted" id="accountsSectionHint">每个账号都独立管理；先保存资料，再创建认证任务，然后打开认证页完成授权</p>
+              </div>
+              <div class="section-caption" id="accountsSummaryText"></div>
+            </div>
+            <div class="accounts-workspace">
+              <aside class="account-index-panel">
+                <div class="account-index-toolbar">
+                  <strong id="accountIndexTitle">账号索引</strong>
+                  <button id="createAccountBtn" class="primary hidden" type="button">新建账号</button>
+                </div>
+                <div id="accountIndexList" class="account-index-list"></div>
+              </aside>
+              <section class="account-detail-panel">
+                <div id="accountDetailHost"></div>
+              </section>
+            </div>
+          </article>
+
+          <article class="panel log-panel">
+            <div class="section-head">
+              <div>
+                <h3 id="logsSectionTitle">最近记录</h3>
+                <p class="muted" id="logsSectionHint">这里只保留最近的切换与额度同步记录</p>
+              </div>
+            </div>
+            <div class="logs-grid">
+              <div class="log-column">
+                <div class="log-toolbar">
+                  <h4 class="log-title" id="switchLogsTitle">切换记录</h4>
+                  <div class="log-toolbar__actions">
+                    <button id="clearSwitchLogsBtn" type="button" class="ghost danger">清除</button>
+                  </div>
+                </div>
+                <div id="switchLogList" class="card-list"></div>
+                <div class="log-pager">
+                  <button id="switchLogPrevBtn" type="button" class="ghost">上一页</button>
+                  <div id="switchLogPageInfo" class="log-page-info" role="button" tabindex="0" aria-label="切换记录页码">
+                    <span id="switchLogPageText" class="log-page-info__main">暂无记录</span>
+                    <span id="switchLogPageMeta" class="log-page-info__meta"></span>
+                    <input id="switchLogJumpInput" class="log-page-input hidden" type="number" min="1" inputmode="numeric" />
+                  </div>
+                  <button id="switchLogNextBtn" type="button" class="ghost">下一页</button>
+                </div>
+              </div>
+              <div class="log-column">
+                <div class="log-toolbar">
+                  <h4 class="log-title" id="sampleLogsTitle">额度快照</h4>
+                  <div class="log-toolbar__actions">
+                    <button id="clearSampleLogsBtn" type="button" class="ghost danger">清除</button>
+                  </div>
+                </div>
+                <div id="sampleLogList" class="card-list compact"></div>
+                <div class="log-pager">
+                  <button id="sampleLogPrevBtn" type="button" class="ghost">上一页</button>
+                  <div id="sampleLogPageInfo" class="log-page-info" role="button" tabindex="0" aria-label="额度快照页码">
+                    <span id="sampleLogPageText" class="log-page-info__main">暂无记录</span>
+                    <span id="sampleLogPageMeta" class="log-page-info__meta"></span>
+                    <input id="sampleLogJumpInput" class="log-page-input hidden" type="number" min="1" inputmode="numeric" />
+                  </div>
+                  <button id="sampleLogNextBtn" type="button" class="ghost">下一页</button>
+                </div>
+              </div>
+            </div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <template id="accountCardTemplate">
+      <article class="account-card">
+        <div class="account-card__header">
+          <div class="account-title-wrap">
+            <span class="subscription-dot"></span>
+            <div>
+              <h4 class="account-title"></h4>
+              <p class="account-subtitle"></p>
+            </div>
+          </div>
+          <div class="account-header-actions">
+            <span class="account-badge"></span>
+            <span class="status-pill account-subscription"></span>
+            <button type="button" class="ghost header-logout logout-account">退出</button>
+            <button type="button" class="danger delete-account">删除</button>
+          </div>
+        </div>
+
+        <div class="account-stage-strip"></div>
+
+        <div class="detail-summary">
+          <div class="detail-summary__item">
+            <span class="detail-summary-email-label">邮箱名称</span>
+            <strong class="detail-email-title"></strong>
+          </div>
+          <div class="detail-summary__item">
+            <span class="detail-summary-state-label">当前状态</span>
+            <strong class="detail-state-text"></strong>
+          </div>
+        </div>
+
+        <div class="field-grid field-grid--detail">
+          <label>
+            <span class="field-label-email">邮箱</span>
+            <input data-field="email" name="account_email" type="email" autocomplete="off" autocapitalize="off" spellcheck="false" data-bwignore="true" data-1p-ignore="true" data-lpignore="true" />
+          </label>
+          <label>
+            <span class="field-label-login-method">登录方式</span>
+            <select data-field="login_method" name="login_method" autocomplete="off" data-bwignore="true" data-1p-ignore="true" data-lpignore="true">
+              <option value="email">邮箱</option>
+              <option value="google">Google</option>
+            </select>
+          </label>
+          <label>
+            <span class="field-label-expires-at">订阅到期日</span>
+            <input data-field="expires_at" name="expires_at" type="date" autocomplete="off" data-bwignore="true" data-1p-ignore="true" data-lpignore="true" />
+          </label>
+        </div>
+
+          <div class="account-toolbar">
+            <div class="flow-hint muted"></div>
+            <div class="action-row">
+              <button type="button" class="secondary save-account">保存</button>
+              <button type="button" class="secondary bootstrap-account">认证</button>
+              <button type="button" class="primary switch-account">切换</button>
+            </div>
+          </div>
+
+          <div class="account-auth-progress"></div>
+
+        <div class="account-bottom">
+          <div class="quota-panel"></div>
+          <div class="meta-grid"></div>
+        </div>
+      </article>
+    </template>
+
+    <div id="toastViewport" class="toast-viewport" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="/assets/app.js?v=20260325-5" defer></script>
+  </body>
+</html>
