@@ -129,6 +129,12 @@ CREATE TABLE IF NOT EXISTS runtime_locks (
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_account_slots_priority ON account_slots(priority);
 CREATE INDEX IF NOT EXISTS idx_quota_samples_slot_created ON quota_samples(slot_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_switch_events_created ON switch_events(created_at DESC);
@@ -163,6 +169,10 @@ function migrateLegacySlots() {
   ensureColumn('account_slots', 'created_at', 'TEXT');
   ensureColumn('account_slots', 'updated_at', 'TEXT');
   ensureColumn('account_slots', 'identity_key', 'TEXT');
+  ensureColumn('account_slots', 'last_probe_at', 'TEXT');
+  ensureColumn('account_slots', 'last_probe_status', 'TEXT');
+  ensureColumn('account_slots', 'last_probe_error', 'TEXT');
+  ensureColumn('account_slots', 'last_probe_message', 'TEXT');
   ensureColumn('encrypted_profiles', 'identity_key', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_account_slots_updated ON account_slots(updated_at DESC)');
 
@@ -215,9 +225,61 @@ function migrateLegacySlots() {
 
 function seedDefaultSlots() {
   migrateLegacySlots();
+  seedDefaultSettings();
 
   const existingCount = db.prepare('SELECT COUNT(*) AS count FROM account_slots').get().count;
   if (existingCount > 0) return;
+}
+
+const DEFAULT_APP_SETTINGS = Object.freeze({
+  ui_refresh_interval_ms: '30000',
+  availability_probe_enabled: '1',
+  availability_probe_interval_ms: '900000'
+});
+
+function seedDefaultSettings() {
+  const upsert = db.prepare(`
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO NOTHING
+  `);
+  const current = nowIso();
+  Object.entries(DEFAULT_APP_SETTINGS).forEach(([key, value]) => {
+    upsert.run(key, value, current);
+  });
+}
+
+function getAppSettings() {
+  const rows = db.prepare('SELECT key, value FROM app_settings').all();
+  const resolved = {
+    ...DEFAULT_APP_SETTINGS
+  };
+  rows.forEach((row) => {
+    resolved[row.key] = row.value;
+  });
+  return resolved;
+}
+
+function setAppSettings(patch) {
+  const allowed = Object.keys(DEFAULT_APP_SETTINGS);
+  const keys = allowed.filter((key) => Object.prototype.hasOwnProperty.call(patch, key));
+  if (!keys.length) return getAppSettings();
+
+  const statement = db.prepare(`
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      value = excluded.value,
+      updated_at = excluded.updated_at
+  `);
+  const current = nowIso();
+  const tx = db.transaction(() => {
+    keys.forEach((key) => {
+      statement.run(key, String(patch[key]), current);
+    });
+  });
+  tx();
+  return getAppSettings();
 }
 
 function getAdminUser() {
@@ -389,6 +451,10 @@ function updateSlot(slotId, patch) {
     'last_activated_at',
     'last_bootstrap_at',
     'last_error',
+    'last_probe_at',
+    'last_probe_status',
+    'last_probe_error',
+    'last_probe_message',
     'is_active',
     'expires_at'
   ];
@@ -782,6 +848,7 @@ function deleteRuntimeLock(name) {
 }
 
 module.exports = {
+  getAppSettings,
   clearQuotaSamples,
   clearSwitchEvents,
   completeSwitchEvent,
@@ -828,6 +895,7 @@ module.exports = {
   revokeBrowserClient,
   safeParseJson,
   seedDefaultSlots,
+  setAppSettings,
   setActiveSlot,
   touchBrowserClient,
   updateAdminLogin,

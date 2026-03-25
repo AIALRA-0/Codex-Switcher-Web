@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const http = require('http');
+const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { URL } = require('url');
@@ -33,6 +34,8 @@ const CHATGPT_BACKEND_BASE = process.env.CODEX_CHATGPT_BACKEND_BASE || 'https://
 const AUTH_TOKEN_URL = process.env.CODEX_AUTH_TOKEN_URL || 'https://auth.openai.com/oauth/token';
 const ACCESS_TOKEN_REFRESH_SKEW_MS = Number(process.env.CODEX_ACCESS_TOKEN_REFRESH_SKEW_MS || 5 * 60 * 1000);
 const REQUEST_ORIGINATOR = process.env.CODEX_REQUEST_ORIGINATOR || 'codex_vscode';
+const PROBE_TIMEOUT_MS = Number(process.env.CODEX_PROBE_TIMEOUT_MS || 45 * 1000);
+const PROBE_PROMPT = process.env.CODEX_PROBE_PROMPT || 'Reply with exactly: OK';
 const SHARED_AUTH_UID = Number.isFinite(Number(process.env.CODEX_SHARED_AUTH_UID)) ? Number(process.env.CODEX_SHARED_AUTH_UID) : 1000;
 const SHARED_AUTH_GID = Number.isFinite(Number(process.env.CODEX_SHARED_AUTH_GID)) ? Number(process.env.CODEX_SHARED_AUTH_GID) : 1000;
 const SHARED_AUTH_MODE = /^0?[0-7]{3,4}$/.test(String(process.env.CODEX_SHARED_AUTH_MODE || ''))
@@ -162,6 +165,21 @@ function parseAuthRecord(authJson) {
 
 function emptyAuthRecord() {
   return buildAuthRecordFromParsed({});
+}
+
+function withTemporaryAuthWorkspace(authJson, handler) {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-switcher-probe-'));
+  const home = path.join(tempRoot, 'home');
+  const codexHome = path.join(home, '.codex');
+  const workdir = path.join(tempRoot, 'workspace');
+  ensureDir(codexHome, 0o700);
+  ensureDir(workdir, 0o700);
+  atomicWriteFile(path.join(codexHome, 'auth.json'), authJson, { mode: 0o600 });
+  try {
+    return handler({ tempRoot, home, codexHome, workdir });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 }
 
 function readCurrentAuthRecord() {
@@ -435,6 +453,119 @@ async function getUsageStatus() {
 async function getUsageStatusForAuthJson(authJson) {
   if (!authJson) throw new Error('AUTH_JSON_REQUIRED');
   return getUsageStatusForRecord(parseAuthRecord(authJson), { persist: false });
+}
+
+async function refreshProfileTokens(body = {}) {
+  if (!body.authJson) throw new Error('AUTH_JSON_REQUIRED');
+  if (body.expectedAccountId) {
+    validateExpectedAccountId(body.authJson, body.expectedAccountId);
+  }
+  if (body.expectedIdentityKey) {
+    validateExpectedIdentityKey(body.authJson, body.expectedIdentityKey);
+  }
+  const refreshed = await refreshAccessTokenForRecord(parseAuthRecord(body.authJson), {
+    force: true,
+    persist: false
+  });
+  return {
+    ok: true,
+    authJson: refreshed.authJson,
+    accountId: refreshed.accountId || null,
+    identityKey: refreshed.identityKey || null,
+    email: refreshed.email || null
+  };
+}
+
+function runCodexProbeCommand(authJson) {
+  return withTemporaryAuthWorkspace(authJson, ({ home, codexHome, workdir }) => new Promise((resolve, reject) => {
+    const outputFile = path.join(workdir, 'last-message.txt');
+    const child = spawn(CODEX_BINARY, [
+      'exec',
+      '--skip-git-repo-check',
+      '--ephemeral',
+      '--color',
+      'never',
+      '-C',
+      workdir,
+      '-o',
+      outputFile,
+      PROBE_PROMPT
+    ], {
+      env: {
+        ...process.env,
+        HOME: home,
+        CODEX_HOME: codexHome,
+        NO_COLOR: '1'
+      },
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      try {
+        child.kill('SIGTERM');
+      } catch (_) {
+        // ignore
+      }
+    }, PROBE_TIMEOUT_MS);
+
+    child.stdout.on('data', (chunk) => {
+      stdout = `${stdout}${chunk}`.slice(-8000);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr = `${stderr}${chunk}`.slice(-8000);
+    });
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on('exit', (code, signal) => {
+      clearTimeout(timeout);
+      let lastMessage = '';
+      try {
+        lastMessage = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, 'utf8').trim() : '';
+      } catch (_) {
+        lastMessage = '';
+      }
+      resolve({
+        ok: code === 0 && !timedOut,
+        exitCode: code,
+        signal: signal || null,
+        timedOut,
+        lastMessage,
+        stdoutTail: stdout.trim(),
+        stderrTail: stderr.trim()
+      });
+    });
+  }));
+}
+
+async function probeProfile(body = {}) {
+  if (!body.authJson) throw new Error('AUTH_JSON_REQUIRED');
+  if (body.expectedAccountId) {
+    validateExpectedAccountId(body.authJson, body.expectedAccountId);
+  }
+  if (body.expectedIdentityKey) {
+    validateExpectedIdentityKey(body.authJson, body.expectedIdentityKey);
+  }
+
+  const refreshed = await refreshAccessTokenForRecord(parseAuthRecord(body.authJson), {
+    force: false,
+    persist: false
+  });
+  const probe = await runCodexProbeCommand(refreshed.authJson);
+  return {
+    ok: true,
+    observedAt: nowIso(),
+    authJson: refreshed.authJson,
+    accountId: refreshed.accountId || null,
+    identityKey: refreshed.identityKey || null,
+    email: refreshed.email || null,
+    probe
+  };
 }
 
 function handleActivateProfile(body) {
@@ -722,6 +853,16 @@ async function handleRequest(req, res) {
       return sendJson(res, 200, await getUsageStatusForAuthJson(body.authJson || ''));
     }
 
+    if (req.method === 'POST' && url.pathname === '/refresh_profile_tokens') {
+      const body = await readBody(req);
+      return sendJson(res, 200, await refreshProfileTokens(body));
+    }
+
+    if (req.method === 'POST' && url.pathname === '/probe_profile') {
+      const body = await readBody(req);
+      return sendJson(res, 200, await probeProfile(body));
+    }
+
     return sendJson(res, 404, { ok: false, error: 'NOT_FOUND' });
   } catch (error) {
     return sendJson(res, 500, { ok: false, error: error.message });
@@ -802,5 +943,7 @@ module.exports = {
   validateExpectedAccountId,
   validateExpectedIdentityKey,
   getUsageStatus,
-  getUsageStatusForAuthJson
+  getUsageStatusForAuthJson,
+  probeProfile,
+  refreshProfileTokens
 };

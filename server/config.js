@@ -99,6 +99,8 @@ const config = {
   defaultUiLanguage: normalizeUiLanguage(process.env.DEFAULT_UI_LANGUAGE || 'zh-CN'),
   authDeviceUrl: process.env.AUTH_DEVICE_URL || 'https://auth.openai.com/codex/device',
   serverTimeZone: process.env.SERVER_TIMEZONE || process.env.TZ || defaultServerTimeZone(),
+  profileKeepaliveIntervalMs: optionalNumber('PROFILE_KEEPALIVE_INTERVAL_MS', 10 * 60 * 1000),
+  availabilityProbeSweepMs: optionalNumber('AVAILABILITY_PROBE_SWEEP_MS', 30 * 1000),
   loginRateLimitMax: optionalNumber('LOGIN_RATE_LIMIT_MAX', 10),
   loginRateLimitWindowMs: optionalNumber('LOGIN_RATE_LIMIT_WINDOW_MS', 15 * 60 * 1000),
   writeRateLimitMax: optionalNumber('WRITE_RATE_LIMIT_MAX', 120),

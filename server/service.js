@@ -7,7 +7,9 @@ const {
   deleteBootstrapSession,
   deleteProfile,
   getActiveSlot,
+  getAppSettings,
   getBootstrapSession,
+  getLatestActiveBootstrapSession,
   getProfile,
   getRuntimeLock,
   getSlotByAccountId,
@@ -19,6 +21,7 @@ const {
   listSlots,
   nowIso,
   setActiveSlot,
+  setAppSettings,
   updateBootstrapSession,
   updateSlot,
   upsertProfile,
@@ -31,6 +34,8 @@ const {
   captureAuthProfile,
   getBootstrapStatus,
   getLoginStatus,
+  probeProfile,
+  refreshProfileTokens,
   startDeviceAuth,
   getUsageForProfile,
   getUsageStatus,
@@ -45,6 +50,8 @@ const { buildManagedAuthUrl } = require('./auth-link');
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEVICE_AUTH_COOLDOWN_MS = 60 * 1000;
 const RUNTIME_SYNC_TTL_MS = Math.max(5000, Math.min(config.quotaSampleIntervalMs || (2 * 60 * 1000), 15000));
+const SETTINGS_REFRESH_INTERVAL_OPTIONS = [10000, 30000, 60000, 120000];
+const SETTINGS_PROBE_INTERVAL_OPTIONS = [300000, 900000, 1800000, 3600000];
 
 let runtimeSyncCache = {
   key: '',
@@ -52,6 +59,67 @@ let runtimeSyncCache = {
   result: null,
   inFlight: null
 };
+
+function normalizeBooleanSetting(value, fallback = true) {
+  if (value == null) return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+}
+
+function normalizeNumberSetting(value, fallback, allowed) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (Array.isArray(allowed) && allowed.length && !allowed.includes(parsed)) return fallback;
+  return parsed;
+}
+
+function resolveAppSettings() {
+  const stored = getAppSettings();
+  return {
+    runtimeRefreshIntervalMs: normalizeNumberSetting(
+      stored.ui_refresh_interval_ms,
+      30000,
+      SETTINGS_REFRESH_INTERVAL_OPTIONS
+    ),
+    availabilityProbeEnabled: normalizeBooleanSetting(
+      stored.availability_probe_enabled,
+      true
+    ),
+    availabilityProbeIntervalMs: normalizeNumberSetting(
+      stored.availability_probe_interval_ms,
+      900000,
+      SETTINGS_PROBE_INTERVAL_OPTIONS
+    )
+  };
+}
+
+function updateAppSettings(input = {}) {
+  const current = resolveAppSettings();
+  const next = {
+    runtimeRefreshIntervalMs: normalizeNumberSetting(
+      input.runtimeRefreshIntervalMs,
+      current.runtimeRefreshIntervalMs,
+      SETTINGS_REFRESH_INTERVAL_OPTIONS
+    ),
+    availabilityProbeEnabled: Object.prototype.hasOwnProperty.call(input, 'availabilityProbeEnabled')
+      ? !!input.availabilityProbeEnabled
+      : current.availabilityProbeEnabled,
+    availabilityProbeIntervalMs: normalizeNumberSetting(
+      input.availabilityProbeIntervalMs,
+      current.availabilityProbeIntervalMs,
+      SETTINGS_PROBE_INTERVAL_OPTIONS
+    )
+  };
+
+  setAppSettings({
+    ui_refresh_interval_ms: String(next.runtimeRefreshIntervalMs),
+    availability_probe_enabled: next.availabilityProbeEnabled ? '1' : '0',
+    availability_probe_interval_ms: String(next.availabilityProbeIntervalMs)
+  });
+  return resolveAppSettings();
+}
 
 function emptyQuotaSyncResult(observedAt = nowIso()) {
   return {
@@ -336,16 +404,58 @@ function buildDetectedActiveSlot(activeSession, usageSnapshot = null) {
   };
 }
 
+function buildDriftStatus(input = {}) {
+  const previousActiveSlot = input.previousActiveSlot || null;
+  const matchedSlot = input.matchedSlot || null;
+  const accountId = input.accountId || null;
+  const email = normalizeEmail(input.email || '');
+  const switchLock = getRuntimeLock('switch_lock');
+  if (switchLock) return null;
+
+  if (!accountId && previousActiveSlot) {
+    return {
+      kind: 'external_logout',
+      level: 'warning'
+    };
+  }
+
+  if (accountId && !matchedSlot) {
+    return {
+      kind: 'unmanaged_active_session',
+      level: 'warning',
+      email: email || null
+    };
+  }
+
+  if (accountId && previousActiveSlot && matchedSlot && previousActiveSlot.id !== matchedSlot.id) {
+    return {
+      kind: 'external_profile_change',
+      level: 'warning',
+      previousLabel: normalizeEmail(previousActiveSlot.email) || previousActiveSlot.label || previousActiveSlot.id,
+      currentLabel: normalizeEmail(matchedSlot.email) || matchedSlot.label || matchedSlot.id
+    };
+  }
+
+  return null;
+}
+
 async function reconcileActiveSlotFromAgent() {
   try {
+    const previousActiveSlot = getActiveSlot();
     const status = await getLoginStatus();
     const accountId = status.tokens && status.tokens.account_id ? status.tokens.account_id : null;
     const identityKey = status.identityKey ? String(status.identityKey).trim() : null;
     const email = status.email ? String(status.email).trim().toLowerCase() : null;
 
     if (!accountId) {
-      if (getActiveSlot()) setActiveSlot(null);
-      return { activeSlotId: null, accountId: null, identityKey: null, email: null };
+      if (previousActiveSlot) setActiveSlot(null);
+      return {
+        activeSlotId: null,
+        accountId: null,
+        identityKey: null,
+        email: null,
+        drift: buildDriftStatus({ previousActiveSlot })
+      };
     }
 
     const matched = (identityKey ? getSlotByIdentityKey(identityKey) : null)
@@ -368,11 +478,17 @@ async function reconcileActiveSlotFromAgent() {
       activeSlotId: matched ? matched.id : null,
       accountId,
       identityKey,
-      email
+      email,
+      drift: buildDriftStatus({
+        previousActiveSlot,
+        matchedSlot: matched,
+        accountId,
+        email
+      })
     };
   } catch (error) {
     writeAudit('agent.login_status_failed', { message: error.message });
-    return { activeSlotId: null, accountId: null, identityKey: null, email: null, error: error.message };
+    return { activeSlotId: null, accountId: null, identityKey: null, email: null, error: error.message, drift: null };
   }
 }
 
@@ -762,6 +878,164 @@ async function logoutSlot(slotId) {
   writeAudit('slot.logged_out', { slotId: slot.id });
 }
 
+function buildProbeStatusPatch(result) {
+  const observedAt = result && result.observedAt ? result.observedAt : nowIso();
+  const probe = result && result.probe ? result.probe : {};
+  const details = [
+    probe.lastMessage || '',
+    probe.stderrTail || '',
+    probe.stdoutTail || ''
+  ].filter(Boolean).join('\n');
+  return {
+    last_probe_at: observedAt,
+    last_probe_status: probe.ok ? 'ok' : 'error',
+    last_probe_error: probe.ok ? null : (details || `Probe failed${probe.exitCode != null ? ` (exit ${probe.exitCode})` : ''}`),
+    last_probe_message: probe.ok ? (probe.lastMessage || 'OK') : (details || '')
+  };
+}
+
+async function refreshStoredProfileTokensForSlot(slot) {
+  const profile = getProfile(slot.id);
+  if (!profile) return null;
+  const result = await refreshProfileTokens({
+    authJson: decryptString(profile.auth_cipher),
+    expectedAccountId: profile.account_id || slot.account_id || null,
+    expectedIdentityKey: profile.identity_key || slot.identity_key || null
+  });
+  upsertProfile(
+    slot.id,
+    encryptString(result.authJson),
+    result.accountId || slot.account_id || null,
+    result.identityKey || profile.identity_key || slot.identity_key || null
+  );
+  updateSlot(slot.id, {
+    account_id: result.accountId || slot.account_id || null,
+    identity_key: result.identityKey || slot.identity_key || null,
+    last_error: null
+  });
+  return result;
+}
+
+async function keepProfilesWarm() {
+  const slots = listSlots().filter((slot) => slot.has_profile);
+  let refreshedCount = 0;
+  let failedCount = 0;
+  let observedAt = nowIso();
+
+  for (const slot of slots) {
+    try {
+      const result = await refreshStoredProfileTokensForSlot(slot);
+      if (result) {
+        refreshedCount += 1;
+        observedAt = nowIso();
+      }
+    } catch (error) {
+      failedCount += 1;
+      writeAudit('profile.keepalive_failed', { slotId: slot.id, message: error.message });
+    }
+  }
+
+  upsertRuntimeLock('profile_keepalive_status', 'app', {
+    refreshedCount,
+    failedCount,
+    observedAt
+  }, null);
+  return { refreshedCount, failedCount, observedAt };
+}
+
+async function probeManagedAccount(slotId, mode = 'manual') {
+  const slot = getSlotById(slotId);
+  if (!slot) throw new Error('ACCOUNT_NOT_FOUND');
+  const profile = getProfile(slot.id);
+  if (!profile) throw new Error('PROFILE_NOT_FOUND');
+
+  updateSlot(slot.id, {
+    last_probe_status: 'pending',
+    last_probe_error: null
+  });
+
+  try {
+    const result = await probeProfile({
+      authJson: decryptString(profile.auth_cipher),
+      expectedAccountId: profile.account_id || slot.account_id || null,
+      expectedIdentityKey: profile.identity_key || slot.identity_key || null
+    });
+    upsertProfile(
+      slot.id,
+      encryptString(result.authJson),
+      result.accountId || slot.account_id || null,
+      result.identityKey || profile.identity_key || slot.identity_key || null
+    );
+    updateSlot(slot.id, {
+      account_id: result.accountId || slot.account_id || null,
+      identity_key: result.identityKey || slot.identity_key || null,
+      ...buildProbeStatusPatch(result)
+    });
+    writeAudit('probe.completed', {
+      slotId: slot.id,
+      mode,
+      ok: result.probe.ok,
+      exitCode: result.probe.exitCode,
+      timedOut: result.probe.timedOut
+    });
+    return result;
+  } catch (error) {
+    const observedAt = nowIso();
+    updateSlot(slot.id, {
+      last_probe_at: observedAt,
+      last_probe_status: 'error',
+      last_probe_error: error.message,
+      last_probe_message: ''
+    });
+    writeAudit('probe.failed', { slotId: slot.id, mode, message: error.message });
+    throw error;
+  }
+}
+
+function chooseNextProbeSlot(settings) {
+  const pendingBootstrapIds = new Set(
+    listBootstrapSessions(50)
+      .filter((session) => ['starting', 'awaiting_user', 'success_pending_capture', 'succeeded'].includes(session.status))
+      .map((session) => session.slot_id)
+  );
+  return listSlots()
+    .filter((slot) => slot.has_profile && !pendingBootstrapIds.has(slot.id))
+    .sort((left, right) => {
+      const leftTime = left.last_probe_at ? new Date(left.last_probe_at).getTime() : 0;
+      const rightTime = right.last_probe_at ? new Date(right.last_probe_at).getTime() : 0;
+      return leftTime - rightTime;
+    })
+    .find((slot) => {
+      if (!slot.last_probe_at) return true;
+      return (Date.now() - new Date(slot.last_probe_at).getTime()) >= settings.availabilityProbeIntervalMs;
+    }) || null;
+}
+
+async function maybeRunAvailabilityProbe() {
+  const settings = resolveAppSettings();
+  if (!settings.availabilityProbeEnabled) return null;
+  if (getRuntimeLock('switch_lock')) return null;
+  if (getLatestActiveBootstrapSession()) return null;
+  const runningProbe = getRuntimeLock('availability_probe_lock');
+  if (runningProbe) return null;
+
+  const nextSlot = chooseNextProbeSlot(settings);
+  if (!nextSlot) return null;
+
+  upsertRuntimeLock('availability_probe_lock', 'app', { slotId: nextSlot.id }, new Date(Date.now() + 5 * 60 * 1000).toISOString());
+  try {
+    const result = await probeManagedAccount(nextSlot.id, 'auto');
+    upsertRuntimeLock('availability_probe_status', 'app', {
+      slotId: nextSlot.id,
+      observedAt: result.observedAt,
+      ok: result.probe.ok
+    }, null);
+    return result;
+  } finally {
+    deleteRuntimeLock('availability_probe_lock');
+  }
+}
+
 async function deleteManagedAccount(slotId) {
   const slot = getSlotById(slotId);
   if (!slot) throw new Error('ACCOUNT_NOT_FOUND');
@@ -960,6 +1234,7 @@ async function syncPendingBootstrapSessions() {
 async function buildRuntimeSnapshot(options = {}) {
   const skipQuotaSync = options.skipQuotaSync === true;
   const activeSession = await reconcileActiveSlotFromAgent();
+  const settings = resolveAppSettings();
   await syncPendingBootstrapSessions();
   cleanupStaleBootstrapSessions();
   cleanupCapturedBootstrapSessions();
@@ -1002,14 +1277,20 @@ async function buildRuntimeSnapshot(options = {}) {
   return {
     now: nowIso(),
     serverTimeZone: config.serverTimeZone,
+    settings,
     activeSlot,
     activeSession,
+    driftStatus: activeSession && activeSession.drift ? activeSession.drift : null,
     quotaSource: buildQuotaSourceStatus(activeSession, syncResult),
     summary: buildRuntimeSummary(slots),
     slots,
     bootstrapSessions,
     deviceAuthCooldown,
-    switchLock: getRuntimeLock('switch_lock')
+    switchLock: getRuntimeLock('switch_lock'),
+    maintenance: {
+      profileKeepalive: getRuntimeLock('profile_keepalive_status'),
+      availabilityProbe: getRuntimeLock('availability_probe_status')
+    }
   };
 }
 
@@ -1022,12 +1303,17 @@ module.exports = {
   deleteManagedAccount,
   deriveSlotState,
   dispatchBrowserAction,
+  keepProfilesWarm,
   logoutSlot,
+  maybeRunAvailabilityProbe,
   maybeAutoSwitch,
   invalidateRuntimeSyncCache,
+  probeManagedAccount,
   reconcileActiveSlotFromAgent,
+  resolveAppSettings,
   serializeSlot,
   syncPendingBootstrapSessions,
+  updateAppSettings,
   buildDuplicateBootstrapMessage,
   buildDuplicateProfileMessage,
   buildProfileEmailMismatchMessage

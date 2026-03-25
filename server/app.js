@@ -52,10 +52,15 @@ const {
   clearBootstrapTasks,
   deleteBootstrapTask,
   deleteManagedAccount,
+  keepProfilesWarm,
   logoutSlot,
+  maybeRunAvailabilityProbe,
+  probeManagedAccount,
   reconcileActiveSlotFromAgent,
   serializeSlot,
-  syncPendingBootstrapSessions
+  syncPendingBootstrapSessions,
+  resolveAppSettings,
+  updateAppSettings
 } = require('./service');
 const {
   cancelBootstrap,
@@ -303,6 +308,23 @@ app.get('/api/public-config', (_req, res) => {
   });
 });
 
+app.get('/api/settings', assertAuth, (_req, res) => {
+  res.json({
+    ok: true,
+    settings: resolveAppSettings()
+  });
+});
+
+app.patch('/api/settings', writeLimiter, verifyCSRF, assertAuth, (req, res) => {
+  const nextSettings = updateAppSettings(req.body || {});
+  writeAudit('settings.updated', { settings: nextSettings });
+  sendRuntimeUpdate('settings_updated');
+  res.json({
+    ok: true,
+    settings: nextSettings
+  });
+});
+
 app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body || {};
   const admin = getAdminUser();
@@ -480,6 +502,16 @@ app.post('/api/accounts/:id/bootstrap/restart', writeLimiter, verifyCSRF, assert
   }
 });
 
+app.post('/api/accounts/:id/test-message', writeLimiter, verifyCSRF, assertAuth, async (req, res, next) => {
+  try {
+    const result = await probeManagedAccount(req.params.id, 'manual');
+    sendRuntimeUpdate('probe_completed', { accountId: req.params.id });
+    res.json({ ok: true, result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.all(['/api/accounts/:id/auth-workspace', '/api/auth-workspaces/:slotId', '/api/auth-workspaces/:slotId/reset', '/api/auth-workspaces/:slotId/actions'], (_req, res) => {
   res.status(410).json({ ok: false, error: 'AUTH_WORKSPACE_RETIRED' });
 });
@@ -553,6 +585,8 @@ app.use((error, _req, res, _next) => {
 });
 
 let bootstrapSyncTimer = null;
+let keepAliveTimer = null;
+let availabilityProbeTimer = null;
 let httpServer = null;
 let shutdownPromise = null;
 const activeSockets = new Set();
@@ -569,6 +603,33 @@ async function start() {
     });
   }, 5000);
   bootstrapSyncTimer.unref();
+
+  keepAliveTimer = setInterval(() => {
+    keepProfilesWarm().then((status) => {
+      if ((status.refreshedCount || 0) > 0 || (status.failedCount || 0) > 0) {
+        sendRuntimeUpdate('profile_keepalive', status);
+      }
+    }).catch((error) => {
+      writeAudit('profile.keepalive_failed', { message: error.message });
+    });
+  }, config.profileKeepaliveIntervalMs);
+  keepAliveTimer.unref();
+
+  availabilityProbeTimer = setInterval(() => {
+    maybeRunAvailabilityProbe().then((result) => {
+      if (result) sendRuntimeUpdate('availability_probe_completed', { accountId: result.accountId || null });
+    }).catch((error) => {
+      writeAudit('probe.auto_failed', { message: error.message });
+    });
+  }, config.availabilityProbeSweepMs);
+  availabilityProbeTimer.unref();
+
+  keepProfilesWarm().catch((error) => {
+    writeAudit('profile.keepalive_failed', { message: error.message, immediate: true });
+  });
+  maybeRunAvailabilityProbe().catch((error) => {
+    writeAudit('probe.auto_failed', { message: error.message, immediate: true });
+  });
 
   await new Promise((resolve, reject) => {
     const server = app.listen(config.port, config.host, () => {
@@ -590,6 +651,14 @@ async function stop() {
     if (bootstrapSyncTimer) {
       clearInterval(bootstrapSyncTimer);
       bootstrapSyncTimer = null;
+    }
+    if (keepAliveTimer) {
+      clearInterval(keepAliveTimer);
+      keepAliveTimer = null;
+    }
+    if (availabilityProbeTimer) {
+      clearInterval(availabilityProbeTimer);
+      availabilityProbeTimer = null;
     }
     if (httpServer) {
       await new Promise((resolve) => {

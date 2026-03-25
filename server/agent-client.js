@@ -75,6 +75,14 @@ function getUsageForProfile(input) {
   return requestAgent('POST', '/usage_for_profile', input);
 }
 
+function refreshProfileTokens(input) {
+  return requestAgent('POST', '/refresh_profile_tokens', input);
+}
+
+function probeProfile(input) {
+  return requestAgent('POST', '/probe_profile', input);
+}
+
 function logoutActiveAuth() {
   return requestAgent('POST', '/logout_active_auth', {});
 }
@@ -110,6 +118,8 @@ module.exports = {
   captureAuthProfile,
   getBootstrapStatus,
   getLoginStatus,
+  probeProfile,
+  refreshProfileTokens,
   getUsageForProfile,
   getUsageStatus,
   logoutActiveAuth,

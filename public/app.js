@@ -53,6 +53,7 @@ const MESSAGES = {
     loginEyebrow: 'Admin Access',
     loginTitle: '管理员登录',
     emailLabel: '邮箱',
+    adminAccountLabel: '管理员账号',
     passwordLabel: '密码',
     loginAction: '登录',
     loggingIn: '登录中...',
@@ -61,7 +62,27 @@ const MESSAGES = {
     logoutSuccess: '已退出后台',
     dashboardTitle: '管理台',
     runtimeWaiting: '等待数据...',
-    autoRefreshNote: '打开页面会立即刷新，页面保持打开时每 30 秒刷新一次',
+    autoRefreshNote: '打开页面会立即刷新，页面保持打开时每 {interval} 刷新一次',
+    refreshIntervalLabel: '刷新间隔',
+    probeModeLabel: '自动检测',
+    probeIntervalLabel: '检测间隔',
+    probeModeOn: '开启',
+    probeModeOff: '关闭',
+    probeAction: '检测',
+    probeActionRunning: '检测中...',
+    probeSuccess: '账号可用性检测通过',
+    probeStatusPending: '检测中',
+    probeStatusOk: '可用',
+    probeStatusError: '失败',
+    probeStatusIdle: '未检测',
+    probeStatusLabel: '可用性检测',
+    probeLastCheckedLabel: '上次检测',
+    probeMessageLabel: '检测结果',
+    settingsSaved: '设置已保存',
+    driftExternalLogout: '检测到共享 auth 被外部清空或退出，当前没有活动登录态。',
+    driftUnmanagedActiveSession: '检测到未受管的本地活动登录态{email}，请确认是否需要纳入账号列表。',
+    driftExternalProfileChange: '检测到本地活动身份从 {from} 漂移到了 {to}。',
+    driftBannerTitle: '本地漂移检测',
     guideSave: '保存资料',
     guideAuth: '认证账号',
     guideSwitch: '切换使用',
@@ -269,6 +290,7 @@ const MESSAGES = {
     loginEyebrow: 'Admin Access',
     loginTitle: 'Admin Sign In',
     emailLabel: 'Email',
+    adminAccountLabel: 'Admin Account',
     passwordLabel: 'Password',
     loginAction: 'Sign In',
     loggingIn: 'Signing in...',
@@ -277,7 +299,27 @@ const MESSAGES = {
     logoutSuccess: 'Signed out',
     dashboardTitle: 'Control Panel',
     runtimeWaiting: 'Waiting for data...',
-    autoRefreshNote: 'The page refreshes immediately on open and every 30 seconds while it stays open.',
+    autoRefreshNote: 'The page refreshes immediately on open and every {interval} while it stays open.',
+    refreshIntervalLabel: 'Refresh',
+    probeModeLabel: 'Auto Probe',
+    probeIntervalLabel: 'Probe Interval',
+    probeModeOn: 'On',
+    probeModeOff: 'Off',
+    probeAction: 'Test',
+    probeActionRunning: 'Testing...',
+    probeSuccess: 'Account probe succeeded',
+    probeStatusPending: 'Testing',
+    probeStatusOk: 'Healthy',
+    probeStatusError: 'Failed',
+    probeStatusIdle: 'Not tested',
+    probeStatusLabel: 'Availability Probe',
+    probeLastCheckedLabel: 'Last Probe',
+    probeMessageLabel: 'Probe Result',
+    settingsSaved: 'Settings saved',
+    driftExternalLogout: 'The shared auth file was cleared or logged out externally. There is no active session right now.',
+    driftUnmanagedActiveSession: 'Detected an unmanaged active local session{email}. Decide whether it should be added to the account list.',
+    driftExternalProfileChange: 'Detected local auth drift from {from} to {to}.',
+    driftBannerTitle: 'Local Drift Detection',
     guideSave: 'Save details',
     guideAuth: 'Authenticate',
     guideSwitch: 'Switch',
@@ -495,6 +537,24 @@ function t(key, vars = {}) {
   });
 }
 
+function runtimeSettings() {
+  return state.runtime && state.runtime.settings
+    ? state.runtime.settings
+    : {
+        runtimeRefreshIntervalMs: 30000,
+        availabilityProbeEnabled: true,
+        availabilityProbeIntervalMs: 900000
+      };
+}
+
+function formatIntervalLabel(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value <= 0) return '--';
+  if (value < 60 * 1000) return `${Math.round(value / 1000)}s`;
+  if (value % (60 * 60 * 1000) === 0) return `${Math.round(value / (60 * 60 * 1000))}h`;
+  return `${Math.round(value / (60 * 1000))}m`;
+}
+
 function stripAnsi(text) {
   return String(text || '').replace(ANSI_PATTERN, '');
 }
@@ -522,6 +582,12 @@ function shortId(value) {
   const text = String(value);
   if (text.length <= 18) return text;
   return `${text.slice(0, 8)}...${text.slice(-6)}`;
+}
+
+function truncateText(value, limit = 64) {
+  const text = String(value || '');
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit - 1)}…`;
 }
 
 function isAccountPrivacyEnabled() {
@@ -1016,6 +1082,20 @@ function quotaSyncStatusTone(status) {
   return 'warning';
 }
 
+function probeStatusText(status) {
+  if (status === 'ok') return t('probeStatusOk');
+  if (status === 'error') return t('probeStatusError');
+  if (status === 'pending') return t('probeStatusPending');
+  return t('probeStatusIdle');
+}
+
+function probeStatusTone(status) {
+  if (status === 'ok') return 'healthy';
+  if (status === 'error') return 'expired';
+  if (status === 'pending') return 'warning';
+  return 'unknown';
+}
+
 function quotaLineDescription(label, pct, resetLabel, resetAt) {
   if (pct == null) return t('quotaNoDataLine', { label });
   return t('quotaLineDescription', {
@@ -1300,6 +1380,65 @@ function renderWorkspaceGuide() {
   };
 }
 
+function renderDashboardSettings() {
+  const settings = runtimeSettings();
+  const refreshSelect = document.getElementById('refreshIntervalSelect');
+  const probeModeSelect = document.getElementById('probeModeSelect');
+  const probeIntervalSelect = document.getElementById('probeIntervalSelect');
+  const autoRefreshNote = document.getElementById('autoRefreshNote');
+  const refreshLabel = document.getElementById('refreshIntervalLabel');
+  const probeModeLabel = document.getElementById('probeModeLabel');
+  const probeIntervalLabel = document.getElementById('probeIntervalLabel');
+  if (refreshLabel) refreshLabel.textContent = t('refreshIntervalLabel');
+  if (probeModeLabel) probeModeLabel.textContent = t('probeModeLabel');
+  if (probeIntervalLabel) probeIntervalLabel.textContent = t('probeIntervalLabel');
+  if (autoRefreshNote) {
+    autoRefreshNote.textContent = t('autoRefreshNote', {
+      interval: formatIntervalLabel(settings.runtimeRefreshIntervalMs)
+    });
+  }
+  if (refreshSelect) refreshSelect.value = String(settings.runtimeRefreshIntervalMs);
+  if (probeModeSelect) {
+    probeModeSelect.value = settings.availabilityProbeEnabled ? '1' : '0';
+    const [onOption, offOption] = probeModeSelect.options;
+    if (onOption) onOption.textContent = t('probeModeOn');
+    if (offOption) offOption.textContent = t('probeModeOff');
+  }
+  if (probeIntervalSelect) probeIntervalSelect.value = String(settings.availabilityProbeIntervalMs);
+}
+
+function driftMessage(driftStatus) {
+  if (!driftStatus) return '';
+  if (driftStatus.kind === 'external_logout') return t('driftExternalLogout');
+  if (driftStatus.kind === 'unmanaged_active_session') {
+    const emailSuffix = driftStatus.email ? `（${displayEmailValue(driftStatus.email, { reveal: true })}）` : '';
+    return t('driftUnmanagedActiveSession', { email: emailSuffix });
+  }
+  if (driftStatus.kind === 'external_profile_change') {
+    return t('driftExternalProfileChange', {
+      from: driftStatus.previousLabel || '--',
+      to: driftStatus.currentLabel || '--'
+    });
+  }
+  return '';
+}
+
+function renderDriftBanner(runtime) {
+  const host = document.getElementById('driftBannerHost');
+  if (!host) return;
+  const driftStatus = runtime && runtime.driftStatus;
+  if (!driftStatus) {
+    host.innerHTML = '';
+    return;
+  }
+  host.innerHTML = `
+    <div class="drift-banner drift-banner--${escapeHtml(driftStatus.level || 'warning')}">
+      <strong>${t('driftBannerTitle')}</strong>
+      <p>${escapeHtml(driftMessage(driftStatus))}</p>
+    </div>
+  `;
+}
+
 function applyStaticTranslations() {
   document.documentElement.lang = currentUiLanguage();
   document.title = t('documentTitle');
@@ -1308,11 +1447,10 @@ function applyStaticTranslations() {
     appTitle: 'appTitle',
     loginEyebrow: 'loginEyebrow',
     loginTitle: 'loginTitle',
-    loginEmailLabel: 'emailLabel',
+    loginEmailLabel: 'adminAccountLabel',
     loginPasswordLabel: 'passwordLabel',
     loginSubmitBtn: 'loginAction',
     dashboardTitle: 'dashboardTitle',
-    autoRefreshNote: 'autoRefreshNote',
     guideStepSave: 'guideSave',
     guideStepAuth: 'guideAuth',
     guideStepSwitch: 'guideSwitch',
@@ -1355,6 +1493,7 @@ function applyStaticTranslations() {
   syncTimeDisplayButton();
   syncAccountPrivacyButton();
   renderWorkspaceGuide();
+  renderDashboardSettings();
 }
 
 function renderSummary(runtime) {
@@ -1566,6 +1705,7 @@ function buildQuotaPanel(account) {
 }
 
 function buildMetaGrid(account) {
+  const probeMessage = account.last_probe_error || account.last_probe_message || '--';
   const errorMarkup = account.last_error && account.last_error !== '--'
     ? `<div class="fact-row fact-row--error"><span>${t('errorLabel')}</span><strong>${escapeHtml(humanizeBackendError(account.last_error))}</strong></div>`
     : '';
@@ -1585,6 +1725,18 @@ function buildMetaGrid(account) {
     <div class="fact-row">
       <span>${t('accountIdLabel')}</span>
       <strong class="mono" title="${account.account_id || '--'}">${shortId(account.account_id)}</strong>
+    </div>
+    <div class="fact-row">
+      <span>${t('probeStatusLabel')}</span>
+      <strong class="status-text ${probeStatusTone(account.last_probe_status)}">${probeStatusText(account.last_probe_status)}</strong>
+    </div>
+    <div class="fact-row">
+      <span>${t('probeLastCheckedLabel')}</span>
+      <strong>${escapeHtml(formatUtcTimestamp(account.last_probe_at, { includeSeconds: true }))}</strong>
+    </div>
+    <div class="fact-row">
+      <span>${t('probeMessageLabel')}</span>
+      <strong title="${escapeHtml(maskEmailsInText(probeMessage))}">${escapeHtml(truncateText(maskEmailsInText(probeMessage), 72))}</strong>
     </div>
     ${errorMarkup}
   `;
@@ -1652,6 +1804,8 @@ function syncClientPendingBootstrapFlags() {
 
 function renderRuntimeState(options = {}) {
   if (!state.runtime) return;
+  renderDashboardSettings();
+  renderDriftBanner(state.runtime);
   renderRuntimeTimestamp(state.runtime.now || new Date().toISOString());
   renderSummary(state.runtime);
   renderActiveSlot(state.runtime);
@@ -1807,6 +1961,7 @@ function updateAccountCardState(card) {
 
   const saveButton = card.querySelector('.save-account');
   const authButton = card.querySelector('.bootstrap-account');
+  const testButton = card.querySelector('.test-account');
   const switchButton = card.querySelector('.switch-account');
   const logoutButton = card.querySelector('.logout-account');
   const deleteButton = card.querySelector('.delete-account');
@@ -1814,12 +1969,14 @@ function updateAccountCardState(card) {
 
   const canSave = dirty && draftValidation.valid;
   const canAuth = !dirty && savedReady && !hasPendingBootstrap && !blockedByOtherBootstrap && !cooldown;
+  const canTest = !dirty && savedReady && hasProfile && !hasPendingBootstrap;
   const canSwitch = !dirty && savedReady && hasProfile && !isActive;
   const canLogout = !dirty && savedReady && hasProfile;
   const canDelete = !dirty && !isActive;
 
   saveButton.disabled = !canSave;
   authButton.disabled = !canAuth;
+  testButton.disabled = !canTest;
   switchButton.disabled = !canSwitch;
   logoutButton.disabled = !canLogout;
   deleteButton.disabled = !canDelete;
@@ -1924,6 +2081,7 @@ function renderAccountDetail(account) {
   fragment.querySelector('.field-label-login-method').textContent = t('loginMethodFieldLabel');
   fragment.querySelector('.field-label-expires-at').textContent = t('subscriptionExpiryFieldLabel');
   fragment.querySelector('.save-account').textContent = t('saveAction');
+  fragment.querySelector('.test-account').textContent = t('probeAction');
   fragment.querySelector('.switch-account').textContent = t('switchAction');
   fragment.querySelector('.logout-account').textContent = currentUiLanguage() === 'en' ? 'Log Out' : '退出';
   fragment.querySelector('.delete-account').textContent = t('deleteAction');
@@ -2062,6 +2220,20 @@ async function loadRuntime(options = {}) {
   }
 }
 
+async function saveRuntimeSettings(patch) {
+  const json = await api('/api/settings', {
+    method: 'PATCH',
+    body: JSON.stringify(patch)
+  });
+  if (state.runtime) {
+    state.runtime.settings = json.settings;
+  }
+  renderDashboardSettings();
+  startRuntimeRefreshLoop();
+  showToast(t('settingsSaved'), 'success');
+  scheduleRuntimeReload(10, { fast: true, includeLogs: false });
+}
+
 function bindDynamicHandlers() {
   document.querySelectorAll('.account-card [data-field]').forEach((field) => {
     const eventName = field.tagName === 'SELECT' ? 'change' : 'input';
@@ -2099,6 +2271,25 @@ function bindDynamicHandlers() {
       }, async () => {
         const result = await startBootstrapTask(accountId, { restart });
         optimisticBootstrapStart(result);
+      }).catch(() => {});
+    };
+  });
+
+  document.querySelectorAll('.test-account').forEach((button) => {
+    button.onclick = async () => {
+      const card = button.closest('.account-card');
+      const accountId = card.dataset.accountId;
+      await runButtonAction(button, {
+        pendingText: t('probeActionRunning'),
+        successText: t('probeSuccess'),
+        refreshOnError: true
+      }, async () => {
+        await api(`/api/accounts/${accountId}/test-message`, {
+          method: 'POST',
+          body: '{}'
+        });
+        scheduleRuntimeReload(10, { fast: true, includeLogs: false });
+        scheduleRuntimeReload(220);
       }).catch(() => {});
     };
   });
@@ -2255,9 +2446,10 @@ function bindDynamicHandlers() {
 
 function startRuntimeRefreshLoop() {
   if (state.refreshTimer) clearInterval(state.refreshTimer);
+  const settings = runtimeSettings();
   state.refreshTimer = setInterval(() => {
     scheduleRuntimeReload(0);
-  }, REFRESH_INTERVAL_MS);
+  }, settings.runtimeRefreshIntervalMs || REFRESH_INTERVAL_MS);
 }
 
 function startEventStream() {
@@ -2390,6 +2582,21 @@ document.getElementById('createAccountBtn').addEventListener('click', async () =
     state.selectedAccountId = result.account.id;
     scheduleRuntimeReload(10);
   }).catch(() => {});
+});
+
+document.getElementById('refreshIntervalSelect').addEventListener('change', async (event) => {
+  const value = Number(event.target.value);
+  await saveRuntimeSettings({ runtimeRefreshIntervalMs: value }).catch(() => {});
+});
+
+document.getElementById('probeModeSelect').addEventListener('change', async (event) => {
+  const value = String(event.target.value) === '1';
+  await saveRuntimeSettings({ availabilityProbeEnabled: value }).catch(() => {});
+});
+
+document.getElementById('probeIntervalSelect').addEventListener('change', async (event) => {
+  const value = Number(event.target.value);
+  await saveRuntimeSettings({ availabilityProbeIntervalMs: value }).catch(() => {});
 });
 
 document.getElementById('timeDisplayToggleBtn').addEventListener('click', () => {

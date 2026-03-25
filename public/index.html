@@ -32,8 +32,8 @@
           </div>
           <form id="loginForm" class="login-form">
             <label>
-              <span id="loginEmailLabel">邮箱</span>
-              <input id="loginEmail" name="admin_email" type="email" autocomplete="username" autocapitalize="off" spellcheck="false" data-bwignore="true" data-1p-ignore="true" data-lpignore="true" required />
+              <span id="loginEmailLabel">管理员账号</span>
+              <input id="loginEmail" name="admin_email" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" data-bwignore="true" data-1p-ignore="true" data-lpignore="true" required />
             </label>
             <label>
               <span id="loginPasswordLabel">密码</span>
@@ -50,7 +50,36 @@
                 <h2 id="dashboardTitle">管理台</h2>
                 <p class="muted" id="runtimeTimestamp">等待数据...</p>
               </div>
-              <div class="topbar-note" id="autoRefreshNote">打开页面会立即刷新，页面保持打开时每 30 秒刷新一次</div>
+              <div class="topbar-note">
+                <div id="autoRefreshNote">打开页面会立即刷新，页面保持打开时每 30 秒刷新一次</div>
+                <div class="dashboard-settings">
+                  <label class="dashboard-setting">
+                    <span id="refreshIntervalLabel">刷新间隔</span>
+                    <select id="refreshIntervalSelect">
+                      <option value="10000">10s</option>
+                      <option value="30000">30s</option>
+                      <option value="60000">60s</option>
+                      <option value="120000">120s</option>
+                    </select>
+                  </label>
+                  <label class="dashboard-setting">
+                    <span id="probeModeLabel">自动检测</span>
+                    <select id="probeModeSelect">
+                      <option value="1">开启</option>
+                      <option value="0">关闭</option>
+                    </select>
+                  </label>
+                  <label class="dashboard-setting">
+                    <span id="probeIntervalLabel">检测间隔</span>
+                    <select id="probeIntervalSelect">
+                      <option value="300000">5m</option>
+                      <option value="900000">15m</option>
+                      <option value="1800000">30m</option>
+                      <option value="3600000">60m</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
             </div>
 
             <div class="guide-strip">
@@ -61,6 +90,7 @@
             </div>
 
             <div id="workspaceGuideHost"></div>
+            <div id="driftBannerHost"></div>
 
             <div class="summary-grid" id="summaryGrid"></div>
 
@@ -202,6 +232,7 @@
             <div class="action-row">
               <button type="button" class="secondary save-account">保存</button>
               <button type="button" class="secondary bootstrap-account">认证</button>
+              <button type="button" class="ghost test-account">检测</button>
               <button type="button" class="primary switch-account">切换</button>
             </div>
           </div>

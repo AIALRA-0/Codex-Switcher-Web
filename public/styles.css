@@ -182,6 +182,30 @@ body.is-login-mode .page-grid {
   text-align: right;
 }
 
+.dashboard-settings {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.dashboard-setting {
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+}
+
+.dashboard-setting span {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.dashboard-setting select {
+  min-width: 0;
+  min-height: 38px;
+  padding: 8px 10px;
+}
+
 #runtimeTimestamp {
   line-height: 1.55;
 }
@@ -1084,6 +1108,18 @@ pre {
   flex-wrap: wrap;
 }
 
+.status-text.healthy {
+  color: var(--success);
+}
+
+.status-text.expired {
+  color: var(--danger);
+}
+
+.status-text.warning {
+  color: var(--warn);
+}
+
 .account-bottom {
   display: grid;
   grid-template-columns: 1fr;
@@ -1098,6 +1134,28 @@ pre {
 
 .account-auth-progress:empty {
   display: none;
+}
+
+#driftBannerHost {
+  display: grid;
+  gap: 12px;
+}
+
+.drift-banner {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 16px;
+}
+
+.drift-banner strong,
+.drift-banner p {
+  margin: 0;
+}
+
+.drift-banner--warning {
+  border: 1px solid #fcd34d;
+  background: #fff8db;
 }
 
 .account-auth-card {
@@ -1516,6 +1574,14 @@ pre {
     max-width: none;
   }
 
+  .dashboard-settings {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-setting {
+    justify-items: stretch;
+  }
+
   .guide-strip {
     grid-template-columns: 1fr;
   }
@@ -1531,7 +1597,7 @@ pre {
 
   .action-row {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .account-index-item__top,

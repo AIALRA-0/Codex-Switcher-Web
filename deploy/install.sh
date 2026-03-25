@@ -108,6 +108,8 @@ AUTH_DEVICE_URL=https://auth.openai.com/codex/device
 QUOTA_SAMPLE_INTERVAL_MS=30000
 SWITCH_LOCK_MS=60000
 SERVER_TIMEZONE=UTC
+PROFILE_KEEPALIVE_INTERVAL_MS=600000
+AVAILABILITY_PROBE_SWEEP_MS=30000
 LOGIN_RATE_LIMIT_MAX=10
 LOGIN_RATE_LIMIT_WINDOW_MS=900000
 WRITE_RATE_LIMIT_MAX=120
@@ -159,7 +161,7 @@ prompt APP_DOMAIN "Codex Switcher domain" "codex-switcher.example.com"
 prompt DEPLOY_MODE "Code Server mode (external/bundled)" "external"
 prompt DEFAULT_UI_LANGUAGE "Default UI language (zh-CN/en)" "zh-CN"
 prompt WEB_BIND_PORT "Codex Switcher bind port" "29000"
-prompt ADMIN_SEED_EMAIL "Initial admin email" "admin@example.com"
+prompt ADMIN_SEED_EMAIL "Initial admin account" "admin@example.com"
 prompt_secret ADMIN_SEED_PASSWORD "Initial admin password"
 
 SESSION_SECRET=<generate-a-random-session-secret>
