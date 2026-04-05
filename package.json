@@ -1,21 +1,22 @@
 {
   "name": "codex-switcher-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Self-hosted web console for managing Codex accounts, auth tasks, switching, and usage tracking.",
   "main": "server/app.js",
   "type": "commonjs",
   "scripts": {
     "start": "node server/app.js",
     "start:agent": "node server/agent.js",
-    "test": "node --test tests/*.test.js"
+    "test": "NODE_ENV=test node --test tests/*.test.js"
   },
   "dependencies": {
-    "bcrypt": "^6.0.0",
+    "bcrypt": "^5.1.1",
     "better-sqlite3": "^9.4.0",
     "cookie-session": "^2.0.0",
     "express": "^4.19.2",
     "express-rate-limit": "^7.3.0",
-    "helmet": "^7.1.0"
+    "helmet": "^7.1.0",
+    "playwright-core": "^1.58.2"
   },
   "devDependencies": {
     "jsdom": "^26.1.0"

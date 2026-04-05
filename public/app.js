@@ -1,559 +1,57 @@
 const state = {
   csrf: '',
   runtime: null,
-  publicConfig: {
-    defaultUiLanguage: 'zh-CN',
-    codeWorkspaceUrl: '',
-    codeOrigin: ''
-  },
   recentSwitches: [],
   recentSamples: [],
   switchLogPage: 1,
   sampleLogPage: 1,
-  timeDisplayMode: 'server',
-  uiLanguage: 'zh-CN',
+  timeDisplayMode: 'local',
   serverTimeZone: 'UTC',
   refreshTimer: null,
+  refreshCountdownTimer: null,
   eventSource: null,
   runtimeReloadTimer: null,
+  deferredLogsLoadTimer: null,
   runtimeReloadOptions: null,
   loadingRuntime: false,
+  refreshPending: false,
   queuedRuntimeReload: false,
   queuedRuntimeReloadOptions: null,
   openBootstrapLogIds: new Set(),
   selectedAccountId: null,
   toastId: 0,
   accountPrivacyEnabled: false,
-  sessionEmail: ''
+  sessionEmail: '',
+  refreshSeconds: 10,
+  refreshCountdown: 10,
+  accountSearch: '',
+  accountSort: 'availability',
+  accountFilter: 'all',
+  accountLoginMethodFilter: 'all',
+  settings: {
+    autoSwitchEnabled: false
+  },
+  initialRefreshRequested: false,
+  presentedAlertIds: new Set(),
+  exchangeDestroyTimer: null,
+  exchangeDestroyAt: null,
+  exchangeStatus: null
 };
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const REFRESH_INTERVAL_MS = 30 * 1000;
 const LOG_PAGE_SIZE = 5;
 const TIME_DISPLAY_STORAGE_KEY = 'codex-switcher-time-display-mode';
 const ACCOUNT_PRIVACY_STORAGE_KEY = 'codex-switcher-account-privacy-enabled';
-const UI_LANGUAGE_STORAGE_KEY = 'codex-switcher-ui-language';
+const REFRESH_SECONDS_STORAGE_KEY = 'codex-switcher-refresh-seconds';
+const ACCOUNT_SORT_STORAGE_KEY = 'codex-switcher-account-sort';
+const ACCOUNT_FILTER_STORAGE_KEY = 'codex-switcher-account-filter';
+const ACCOUNT_LOGIN_METHOD_FILTER_STORAGE_KEY = 'codex-switcher-account-login-method-filter';
+const ACCOUNT_SEARCH_STORAGE_KEY = 'codex-switcher-account-search';
 const ANSI_PATTERN = /\u001B\[[0-9;]*m/g;
 const EMAIL_TEXT_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-const MESSAGES = {
-  'zh-CN': {
-    documentTitle: 'Codex Switcher',
-    appEyebrow: 'Codex Account Console',
-    appTitle: 'Codex 账号管理',
-    languageToggle: '语言：中文',
-    timeDisplayLocal: '时间显示：本地',
-    timeDisplayServer: '时间显示：服务器',
-    accountPrivacyOn: '账号隐私：开',
-    accountPrivacyOff: '账号隐私：关',
-    sessionLoggedOut: '未登录',
-    logoutBackend: '退出后台',
-    loginEyebrow: 'Admin Access',
-    loginTitle: '管理员登录',
-    emailLabel: '邮箱',
-    adminAccountLabel: '管理员账号',
-    passwordLabel: '密码',
-    loginAction: '登录',
-    loggingIn: '登录中...',
-    loginSuccess: '登录成功',
-    loggingOut: '退出中...',
-    logoutSuccess: '已退出后台',
-    dashboardTitle: '管理台',
-    runtimeWaiting: '等待数据...',
-    autoRefreshNote: '打开页面会立即刷新，页面保持打开时每 {interval} 刷新一次',
-    refreshIntervalLabel: '刷新间隔',
-    probeModeLabel: '自动检测',
-    probeIntervalLabel: '检测间隔',
-    probeModeOn: '开启',
-    probeModeOff: '关闭',
-    probeAction: '检测',
-    probeActionRunning: '检测中...',
-    probeSuccess: '账号可用性检测通过',
-    probeStatusPending: '检测中',
-    probeStatusOk: '可用',
-    probeStatusError: '失败',
-    probeStatusIdle: '未检测',
-    probeStatusLabel: '可用性检测',
-    probeLastCheckedLabel: '上次检测',
-    probeMessageLabel: '检测结果',
-    settingsSaved: '设置已保存',
-    driftExternalLogout: '检测到共享 auth 被外部清空或退出，当前没有活动登录态。',
-    driftUnmanagedActiveSession: '检测到未受管的本地活动登录态{email}，请确认是否需要纳入账号列表。',
-    driftExternalProfileChange: '检测到本地活动身份从 {from} 漂移到了 {to}。',
-    driftBannerTitle: '本地漂移检测',
-    guideSave: '保存资料',
-    guideAuth: '认证账号',
-    guideSwitch: '切换使用',
-    guideLogout: '退出留存',
-    workspaceGuideTitle: '开始使用 code-server',
-    workspaceGuideLead: '部署完成后，先打开工作区，再在 code-server 里开始对话。',
-    workspaceGuideOpen: '打开工作区',
-    workspaceGuideCopy: '复制工作区链接',
-    workspaceGuideNoUrl: '当前部署还没有配置 code-server 工作区链接，请在安装时设置 CODE_WORKSPACE_URL。',
-    workspaceGuideStepOpen: '1. 先打开 code-server 工作区链接。',
-    workspaceGuideStepBundled: '2. 如果是首次进入且没有项目，请在 code-server 中选择“Open Folder”，打开 /workspace 或你自己的项目目录。',
-    workspaceGuideStepExternal: '2. 如果是首次进入且没有项目，请在 code-server 中选择“Open Folder”，打开你想聊天/编码的项目目录。',
-    workspaceGuideStepRefresh: '3. 切换账号后，如果 Codex / ChatGPT 侧栏仍显示旧状态，刷新一次 code-server 页面。',
-    workspaceGuideStepChat: '4. 打开 OpenAI / Codex 扩展侧栏后即可开始对话。',
-    currentUsageTitle: '当前使用',
-    currentUsageHint: '只有点击“切换”时，code-server 的 Codex 才会换号',
-    quotaSourceIdle: '等待同步',
-    quotaSourceOnline: '后端同步正常',
-    quotaSourceDegraded: '后端部分异常',
-    quotaSourceError: '后端同步失败',
-    accountsSectionTitle: '账号列表',
-    accountsSectionHint: '每个账号都独立管理；先保存资料，再创建认证任务，然后打开认证页完成授权',
-    accountIndexTitle: '账号索引',
-    createAccount: '新建账号',
-    logsSectionTitle: '最近记录',
-    logsSectionHint: '这里只保留最近的切换与额度同步记录',
-    switchLogsTitle: '切换记录',
-    sampleLogsTitle: '额度快照',
-    clearAction: '清除',
-    prevPage: '上一页',
-    nextPage: '下一页',
-    switchLogPageAria: '切换记录页码',
-    sampleLogPageAria: '额度快照页码',
-    emptyPageInfo: '暂无记录',
-    emptyEmail: '未填写邮箱',
-    stateDraft: '待保存',
-    stateActive: '当前活动',
-    stateReady: '已认证',
-    stateAuthRequired: '待认证',
-    stateExhausted: '5 小时额度用尽',
-    stateError: '异常',
-    freshnessLive: '刚刚同步',
-    freshnessStale: '等待刷新',
-    freshnessPredicted: '预测值',
-    bootstrapStarting: '准备中',
-    bootstrapAwaitingUser: '等待认证',
-    bootstrapVerifying: '校验身份中',
-    bootstrapCaptured: '已完成',
-    bootstrapFailed: '已失败',
-    bootstrapRetrying: '重试中',
-    operationFailed: '操作失败',
-    invalidCredentials: '管理员邮箱或密码不正确',
-    accountLocked: '登录尝试过多，请稍后再试',
-    deviceAuthRateLimited: '设备码请求过于频繁，请等待一分钟后再试，或先删除当前认证任务',
-    bootstrapAlreadyActive: '当前已经有其他账号在认证，请先完成或取消当前任务',
-    activeAccountCannotDelete: '当前正在使用的账号不能删除，请先切换或退出',
-    activeAccountMustExitFirst: '当前正在使用的账号不能直接修改邮箱或登录方式，请先退出',
-    accountDataIncomplete: '请先把邮箱、登录方式和订阅到期日填写完整并保存',
-    profileNotFound: '这个账号还没有服务器留存，请先认证',
-    backendQuotaMissing: '后端暂时没有返回可用额度',
-    backendWorkspaceDeactivated: '工作区已失效，后端暂时无法读取这个账号的实时额度',
-    backendLoginExpired: '后端登录态已失效，暂时无法读取实时额度',
-    summaryTotalAccounts: '账号总数',
-    summaryAuthenticated: '已认证',
-    summaryExpiringSoon: '即将到期',
-    summaryBackendRefreshed: '后端已刷新',
-    runtimeTimestamp: '最近一次刷新：{time}',
-    activeEmptyTitle: '当前没有活动账号',
-    activeEmptyHint: '当服务器上的 code-server 存在有效 Codex 登录态时，这里会自动识别并显示额度',
-    activeAccountLabel: '当前账号',
-    syncTimeLabel: '同步时间',
-    accountIdLabel: 'account_id',
-    planTypeLabel: '计划类型',
-    backendRealtimeRead: '后端实时读取',
-    backendSyncHealthy: '后端同步正常',
-    backendSyncFailedCount: '有 {count} 个账号同步失败',
-    authTaskTitle: '认证任务',
-    authOpenHintEmail: '点击“打开认证页”即可进入 OpenAI 授权页，按邮箱登录方式完成授权。浏览器环境由你自己决定。',
-    authOpenHintGoogle: '点击“打开认证页”即可进入 OpenAI 授权页，按 Google 登录方式完成授权。浏览器环境由你自己决定。',
-    authCaptured: '认证完成，资料已写回服务器。',
-    authVerifying: 'OpenAI 已授权，正在校验并接管服务器留存。',
-    authGeneratingCode: '正在生成设备码，请稍等。',
-    targetAccountLabel: '目标账号',
-    deviceCodeLabel: '设备码',
-    copyAction: '复制',
-    openAuthPage: '打开认证页',
-    copyAuthLink: '复制认证链接',
-    regenerateDeviceCode: '重新生成设备码',
-    reauthenticate: '重新认证',
-    cancelAuth: '取消认证',
-    viewLogs: '查看日志',
-    noDeviceCodeYet: '暂未拿到设备码',
-    updatedAt: '最近更新 {time}',
-    quotaHeading: '额度',
-    realtimeQuotaView: '实时剩余视图',
-    quotaMissingRealtime: '后端暂时没有拿到实时额度，因此这里不会继续展示旧的历史值',
-    subscriptionExpiryLabel: '订阅到期',
-    lastSyncLabel: '最后同步',
-    lastAuthLabel: '最后认证',
-    errorLabel: '错误',
-    stageSavedPending: '先保存资料',
-    stageSavedDone: '资料已保存',
-    stageAuthPending: '待认证',
-    stageAuthActive: '认证进行中',
-    stageAuthDone: '已完成认证',
-    stageCurrentIdle: '未切换',
-    stageCurrentActive: '当前正在使用',
-    googleLogin: 'Google 登录',
-    emailLogin: '邮箱登录',
-    emptyNoAccountsTitle: '还没有账号',
-    emptyNoAccountsHint: '点击“新建账号”开始录入邮箱、登录方式和到期日',
-    emptySelectAccountTitle: '请选择一个账号',
-    emptySelectAccountHint: '左侧点选账号后，这里会显示资料、额度和操作按钮',
-    emptySwitchLogsTitle: '暂无切换记录',
-    emptySwitchLogsHint: '点击账号卡片中的“切换”后，这里会留下记录',
-    emptySampleLogsTitle: '暂无额度快照',
-    emptySampleLogsHint: '页面加载后会立即刷新一次已认证账号的额度',
-    switchInProgress: '进行中',
-    switchCompleted: '已完成',
-    switchFailed: '失败',
-    switchReasonManual: '手动切换',
-    switchReasonAuto: '自动切换',
-    switchReasonCapture: '认证接管',
-    quotaSyncSuccess: '同步成功',
-    quotaSyncFailed: '同步失败',
-    quotaSyncWaiting: '等待同步',
-    saveAccountFirst: '资料已修改，下一步先保存',
-    fillEmailFirst: '请先填写邮箱',
-    invalidEmail: '邮箱格式不正确',
-    selectLoginMethod: '请选择登录方式',
-    setExpiryDate: '请设置订阅到期日',
-    invalidExpiryDate: '订阅到期日格式不正确',
-    hintFillAndSave: '先把资料填完整并保存',
-    hintAuthInProgress: '认证任务已经在进行中，请先完成或删除当前任务',
-    hintAuthBlocked: '当前正在认证 {email}，请先完成或删除该任务',
-    hintDeviceCooldown: '设备码请求过于频繁，请等待到 {time} 后再试',
-    hintNextAuth: '资料已保存，下一步创建认证任务',
-    hintActiveReauth: '当前正在使用这个账号，如需更新服务器留存可重新认证',
-    hintReady: '已经可以切换使用，也可以退出服务器留存',
-    accountsSummary: '已认证 {authenticated} / 全部 {total} · 即将到期 {expiring} · 已到期 {expired}',
-    switchFromTo: '从 {from} 切到 {to}',
-    sourceUnknown: '来源未知',
-    targetUnknown: '目标未知',
-    planUnknown: '计划未知',
-    untrackedAccount: '未归档账号',
-    quotaWindow5h: '5 小时额度',
-    quotaWindow1w: '1 周额度',
-    quotaWindow5hShort: '5小时',
-    quotaWindow1wShort: '1周',
-    saveAction: '保存',
-    switchAction: '切换',
-    deleteAction: '删除',
-    displayEmailLabel: '邮箱名称',
-    currentStateLabel: '当前状态',
-    loginMethodFieldLabel: '登录方式',
-    subscriptionExpiryFieldLabel: '订阅到期日',
-    accountPrivacyPlaceholder: '账号隐私已开启',
-    copiedDeviceCode: '设备码 {code} 已复制',
-    copiedTargetAccount: '目标账号 {email} 已复制',
-    copiedAuthLink: '认证链接已复制',
-    copiedWorkspaceLink: '工作区链接已复制',
-    openedAuthLink: '认证链接已在新标签打开',
-    inputValidPage: '请输入有效页码',
-    copiedCreateHint: '已创建空白账号',
-    accountSaved: '账号资料已保存',
-    createdBootstrap: '认证任务已创建，直接打开认证页即可继续',
-    restartedBootstrap: '新的设备码已生成，直接打开认证页即可继续',
-    switchedToAccount: '已切换到 {name}',
-    logoutServerRetained: '服务器留存已清除',
-    deleteAccountConfirm: '确定删除 {label} 吗？这会同时删除服务器上保存的 profile、认证任务和临时认证文件',
-    accountDeleted: '账号及后台留存已删除',
-    bootstrapDeleted: '认证任务已清除',
-    clearAllBootstrapConfirm: '确定一键清除全部 {count} 个认证任务吗？正在进行中的认证也会被终止',
-    clearedBootstrapTasks: '已清除 {count} 个认证任务',
-    clearSwitchLogsConfirm: '确定清空最近 {count} 条切换记录吗？这个操作不可恢复',
-    clearSwitchLogsSuccess: '已清空 {count} 条切换记录',
-    clearSampleLogsConfirm: '确定清空最近 {count} 条额度快照吗？这个操作不可恢复',
-    clearSampleLogsSuccess: '已清空 {count} 条额度快照',
-    resetTimeTitle: '重置时间',
-    localTimeLabel: '本地时间',
-    serverTimeLabel: '服务器时间',
-    utcTimeLabel: 'UTC时间',
-    remainingLabel: '剩余',
-    usedSuffix: '已用',
-    remainingApprox: '约剩余 {pct}%',
-    noQuotaData: '后端暂时没有返回这项额度',
-    quotaNoDataLine: '{label} 暂无可用数据',
-    quotaLineDescription: '{label}已用 {used}，{remaining}，{reset} 重置',
-    subscriptionUnset: '未设置到期日',
-    subscriptionExpiredOn: '已于 {date} 到期',
-    subscriptionExpiringIn: '{days} 天内到期',
-    subscriptionValidUntil: '有效期至 {date}'
-  },
-  en: {
-    documentTitle: 'Codex Switcher',
-    appEyebrow: 'Codex Account Console',
-    appTitle: 'Codex Account Manager',
-    languageToggle: 'Language: English',
-    timeDisplayLocal: 'Time: Local',
-    timeDisplayServer: 'Time: Server',
-    accountPrivacyOn: 'Account Privacy: On',
-    accountPrivacyOff: 'Account Privacy: Off',
-    sessionLoggedOut: 'Logged out',
-    logoutBackend: 'Sign Out',
-    loginEyebrow: 'Admin Access',
-    loginTitle: 'Admin Sign In',
-    emailLabel: 'Email',
-    adminAccountLabel: 'Admin Account',
-    passwordLabel: 'Password',
-    loginAction: 'Sign In',
-    loggingIn: 'Signing in...',
-    loginSuccess: 'Signed in',
-    loggingOut: 'Signing out...',
-    logoutSuccess: 'Signed out',
-    dashboardTitle: 'Control Panel',
-    runtimeWaiting: 'Waiting for data...',
-    autoRefreshNote: 'The page refreshes immediately on open and every {interval} while it stays open.',
-    refreshIntervalLabel: 'Refresh',
-    probeModeLabel: 'Auto Probe',
-    probeIntervalLabel: 'Probe Interval',
-    probeModeOn: 'On',
-    probeModeOff: 'Off',
-    probeAction: 'Test',
-    probeActionRunning: 'Testing...',
-    probeSuccess: 'Account probe succeeded',
-    probeStatusPending: 'Testing',
-    probeStatusOk: 'Healthy',
-    probeStatusError: 'Failed',
-    probeStatusIdle: 'Not tested',
-    probeStatusLabel: 'Availability Probe',
-    probeLastCheckedLabel: 'Last Probe',
-    probeMessageLabel: 'Probe Result',
-    settingsSaved: 'Settings saved',
-    driftExternalLogout: 'The shared auth file was cleared or logged out externally. There is no active session right now.',
-    driftUnmanagedActiveSession: 'Detected an unmanaged active local session{email}. Decide whether it should be added to the account list.',
-    driftExternalProfileChange: 'Detected local auth drift from {from} to {to}.',
-    driftBannerTitle: 'Local Drift Detection',
-    guideSave: 'Save details',
-    guideAuth: 'Authenticate',
-    guideSwitch: 'Switch',
-    guideLogout: 'Log out',
-    workspaceGuideTitle: 'Get Started with code-server',
-    workspaceGuideLead: 'After deployment, open a workspace first, then start chatting inside code-server.',
-    workspaceGuideOpen: 'Open Workspace',
-    workspaceGuideCopy: 'Copy Workspace Link',
-    workspaceGuideNoUrl: 'No code-server workspace URL is configured for this deployment yet. Set CODE_WORKSPACE_URL during install.',
-    workspaceGuideStepOpen: '1. Open the code-server workspace link first.',
-    workspaceGuideStepBundled: '2. If this is your first visit and no project is open, choose “Open Folder” in code-server and open /workspace or your own project folder.',
-    workspaceGuideStepExternal: '2. If this is your first visit and no project is open, choose “Open Folder” in code-server and open the project folder you want to chat/code in.',
-    workspaceGuideStepRefresh: '3. After switching accounts, refresh code-server once if the Codex / ChatGPT sidebar still shows the previous state.',
-    workspaceGuideStepChat: '4. Open the OpenAI / Codex extension sidebar to start chatting.',
-    currentUsageTitle: 'Current Usage',
-    currentUsageHint: 'The Codex session inside code-server only changes when you click “Switch”.',
-    quotaSourceIdle: 'Waiting',
-    quotaSourceOnline: 'Backend healthy',
-    quotaSourceDegraded: 'Backend partially degraded',
-    quotaSourceError: 'Backend sync failed',
-    accountsSectionTitle: 'Accounts',
-    accountsSectionHint: 'Each account is managed independently: save details, create an auth task, then open the auth page to authorize.',
-    accountIndexTitle: 'Account Index',
-    createAccount: 'New Account',
-    logsSectionTitle: 'Recent Activity',
-    logsSectionHint: 'Only recent switch events and quota samples are kept here.',
-    switchLogsTitle: 'Switch Events',
-    sampleLogsTitle: 'Quota Samples',
-    clearAction: 'Clear',
-    prevPage: 'Previous',
-    nextPage: 'Next',
-    switchLogPageAria: 'Switch log pagination',
-    sampleLogPageAria: 'Quota sample pagination',
-    emptyPageInfo: 'No records',
-    emptyEmail: 'Email not set',
-    stateDraft: 'Draft',
-    stateActive: 'Active',
-    stateReady: 'Authenticated',
-    stateAuthRequired: 'Needs Auth',
-    stateExhausted: '5h quota exhausted',
-    stateError: 'Error',
-    freshnessLive: 'Just synced',
-    freshnessStale: 'Waiting for refresh',
-    freshnessPredicted: 'Predicted',
-    bootstrapStarting: 'Preparing',
-    bootstrapAwaitingUser: 'Waiting for auth',
-    bootstrapVerifying: 'Verifying identity',
-    bootstrapCaptured: 'Completed',
-    bootstrapFailed: 'Failed',
-    bootstrapRetrying: 'Retrying',
-    operationFailed: 'Action failed',
-    invalidCredentials: 'Invalid admin email or password',
-    accountLocked: 'Too many login attempts. Please try again later.',
-    deviceAuthRateLimited: 'Device-code requests are rate-limited. Wait about one minute or clear the current auth task first.',
-    bootstrapAlreadyActive: 'Another account is already being authenticated. Finish or cancel that task first.',
-    activeAccountCannotDelete: 'The active account cannot be deleted. Switch away or log it out first.',
-    activeAccountMustExitFirst: 'The active account must be logged out before changing email or login method.',
-    accountDataIncomplete: 'Fill in email, login method, and expiry date before continuing.',
-    profileNotFound: 'This account does not have a saved server profile yet. Authenticate it first.',
-    backendQuotaMissing: 'The backend did not return usable quota data yet.',
-    backendWorkspaceDeactivated: 'The workspace is deactivated, so the backend cannot read live quota for this account right now.',
-    backendLoginExpired: 'The backend login has expired, so live quota cannot be read right now.',
-    summaryTotalAccounts: 'Total Accounts',
-    summaryAuthenticated: 'Authenticated',
-    summaryExpiringSoon: 'Expiring Soon',
-    summaryBackendRefreshed: 'Backend Refreshed',
-    runtimeTimestamp: 'Last refresh: {time}',
-    activeEmptyTitle: 'No active account',
-    activeEmptyHint: 'When code-server has a valid Codex login, this panel will detect it and show live quota automatically.',
-    activeAccountLabel: 'Current account',
-    syncTimeLabel: 'Synced at',
-    accountIdLabel: 'account_id',
-    planTypeLabel: 'Plan type',
-    backendRealtimeRead: 'Read live from backend',
-    backendSyncHealthy: 'Backend sync healthy',
-    backendSyncFailedCount: '{count} accounts failed to sync',
-    authTaskTitle: 'Auth Task',
-    authOpenHintEmail: 'Use “Open Auth Page” to continue on the OpenAI authorization page with email sign-in. The browser environment is entirely up to you.',
-    authOpenHintGoogle: 'Use “Open Auth Page” to continue on the OpenAI authorization page with Google sign-in. The browser environment is entirely up to you.',
-    authCaptured: 'Authentication finished and the profile has been saved on the server.',
-    authVerifying: 'OpenAI authorization succeeded. Validating identity and capturing the server-side profile now.',
-    authGeneratingCode: 'Generating a device code. Please wait.',
-    targetAccountLabel: 'Target account',
-    deviceCodeLabel: 'Device code',
-    copyAction: 'Copy',
-    openAuthPage: 'Open Auth Page',
-    copyAuthLink: 'Copy Auth Link',
-    regenerateDeviceCode: 'Regenerate Device Code',
-    reauthenticate: 'Re-authenticate',
-    cancelAuth: 'Cancel Auth',
-    viewLogs: 'View Logs',
-    noDeviceCodeYet: 'No device code yet',
-    updatedAt: 'Updated {time}',
-    quotaHeading: 'Quota',
-    realtimeQuotaView: 'Live remaining view',
-    quotaMissingRealtime: 'The backend has not returned live quota yet, so old historical values are hidden.',
-    subscriptionExpiryLabel: 'Subscription expiry',
-    lastSyncLabel: 'Last sync',
-    lastAuthLabel: 'Last auth',
-    errorLabel: 'Error',
-    stageSavedPending: 'Save details',
-    stageSavedDone: 'Details saved',
-    stageAuthPending: 'Needs auth',
-    stageAuthActive: 'Auth in progress',
-    stageAuthDone: 'Authenticated',
-    stageCurrentIdle: 'Not switched',
-    stageCurrentActive: 'Currently in use',
-    googleLogin: 'Google sign-in',
-    emailLogin: 'Email sign-in',
-    emptyNoAccountsTitle: 'No accounts yet',
-    emptyNoAccountsHint: 'Click “New Account” to add email, login method, and expiry date.',
-    emptySelectAccountTitle: 'Select an account',
-    emptySelectAccountHint: 'Choose an account on the left to view details, quota, and actions here.',
-    emptySwitchLogsTitle: 'No switch events yet',
-    emptySwitchLogsHint: 'Switch an account from its card and the event will appear here.',
-    emptySampleLogsTitle: 'No quota samples yet',
-    emptySampleLogsHint: 'Authenticated accounts are refreshed once immediately after the page loads.',
-    switchInProgress: 'In progress',
-    switchCompleted: 'Completed',
-    switchFailed: 'Failed',
-    switchReasonManual: 'Manual switch',
-    switchReasonAuto: 'Auto switch',
-    switchReasonCapture: 'Auth capture',
-    quotaSyncSuccess: 'Synced',
-    quotaSyncFailed: 'Sync failed',
-    quotaSyncWaiting: 'Waiting',
-    saveAccountFirst: 'Details changed. Save them first.',
-    fillEmailFirst: 'Enter an email first',
-    invalidEmail: 'Enter a valid email address',
-    selectLoginMethod: 'Choose a login method',
-    setExpiryDate: 'Set the subscription expiry date',
-    invalidExpiryDate: 'Enter the expiry date in a valid format',
-    hintFillAndSave: 'Complete the details and save first',
-    hintAuthInProgress: 'An auth task is already in progress for this account. Finish or cancel it first.',
-    hintAuthBlocked: '{email} is currently being authenticated. Finish or cancel that task first.',
-    hintDeviceCooldown: 'Device-code requests are cooling down. Try again after {time}.',
-    hintNextAuth: 'Details are saved. Create an auth task next.',
-    hintActiveReauth: 'This account is currently in use. Re-authenticate it if you want to refresh the saved profile.',
-    hintReady: 'This account is ready to switch, or you can log it out from the server.',
-    accountsSummary: '{authenticated} authenticated / {total} total · {expiring} expiring soon · {expired} expired',
-    switchFromTo: 'Switch from {from} to {to}',
-    sourceUnknown: 'Unknown source',
-    targetUnknown: 'Unknown target',
-    planUnknown: 'Unknown plan',
-    untrackedAccount: 'Untracked account',
-    quotaWindow5h: '5h Quota',
-    quotaWindow1w: '1w Quota',
-    quotaWindow5hShort: '5h',
-    quotaWindow1wShort: '1w',
-    saveAction: 'Save',
-    switchAction: 'Switch',
-    deleteAction: 'Delete',
-    displayEmailLabel: 'Display Email',
-    currentStateLabel: 'Current State',
-    loginMethodFieldLabel: 'Login Method',
-    subscriptionExpiryFieldLabel: 'Subscription Expiry',
-    accountPrivacyPlaceholder: 'Account privacy is enabled',
-    copiedDeviceCode: 'Copied device code {code}',
-    copiedTargetAccount: 'Copied target account {email}',
-    copiedAuthLink: 'Copied auth link',
-    copiedWorkspaceLink: 'Copied workspace link',
-    openedAuthLink: 'Opened the auth link in a new tab',
-    inputValidPage: 'Enter a valid page number',
-    copiedCreateHint: 'Created a blank account',
-    accountSaved: 'Account details saved',
-    createdBootstrap: 'Auth task created. Open the auth page to continue.',
-    restartedBootstrap: 'A new device code is ready. Open the auth page to continue.',
-    switchedToAccount: 'Switched to {name}',
-    logoutServerRetained: 'Cleared the saved server profile',
-    deleteAccountConfirm: 'Delete {label}? This also removes the saved server profile, auth tasks, and temporary auth files.',
-    accountDeleted: 'Account and saved backend state deleted',
-    bootstrapDeleted: 'Auth task cleared',
-    clearAllBootstrapConfirm: 'Clear all {count} auth tasks? Any in-progress authentication will also be stopped.',
-    clearedBootstrapTasks: 'Cleared {count} auth tasks',
-    clearSwitchLogsConfirm: 'Clear the most recent {count} switch events? This cannot be undone.',
-    clearSwitchLogsSuccess: 'Cleared {count} switch events',
-    clearSampleLogsConfirm: 'Clear the most recent {count} quota samples? This cannot be undone.',
-    clearSampleLogsSuccess: 'Cleared {count} quota samples',
-    resetTimeTitle: 'Reset time',
-    localTimeLabel: 'Local',
-    serverTimeLabel: 'Server',
-    utcTimeLabel: 'UTC',
-    remainingLabel: 'Remaining',
-    usedSuffix: 'used',
-    remainingApprox: 'about {pct}% left',
-    noQuotaData: 'The backend has not returned quota data for this window yet.',
-    quotaNoDataLine: '{label} has no data yet',
-    quotaLineDescription: '{label}: {used} used, {remaining}, resets {reset}',
-    subscriptionUnset: 'Expiry not set',
-    subscriptionExpiredOn: 'Expired on {date}',
-    subscriptionExpiringIn: 'Expires in {days} day(s)',
-    subscriptionValidUntil: 'Valid until {date}'
-  }
-};
-
-function currentUiLanguage() {
-  return state.uiLanguage === 'en' ? 'en' : 'zh-CN';
-}
-
-function uiLocale() {
-  return currentUiLanguage() === 'en' ? 'en-US' : 'zh-CN';
-}
-
-function t(key, vars = {}) {
-  const lang = currentUiLanguage();
-  const catalog = MESSAGES[lang] || MESSAGES['zh-CN'];
-  const fallback = MESSAGES['zh-CN'] || {};
-  const value = catalog[key] ?? fallback[key] ?? key;
-  if (typeof value === 'function') {
-    return value(vars);
-  }
-  return String(value).replace(/\{(\w+)\}/g, (_match, name) => {
-    const resolved = vars[name];
-    return resolved == null ? '' : String(resolved);
-  });
-}
-
-function runtimeSettings() {
-  return state.runtime && state.runtime.settings
-    ? state.runtime.settings
-    : {
-        runtimeRefreshIntervalMs: 30000,
-        availabilityProbeEnabled: true,
-        availabilityProbeIntervalMs: 900000
-      };
-}
-
-function formatIntervalLabel(ms) {
-  const value = Number(ms);
-  if (!Number.isFinite(value) || value <= 0) return '--';
-  if (value < 60 * 1000) return `${Math.round(value / 1000)}s`;
-  if (value % (60 * 60 * 1000) === 0) return `${Math.round(value / (60 * 60 * 1000))}h`;
-  return `${Math.round(value / (60 * 1000))}m`;
-}
+const REFRESH_PRESET_VALUES = [0, 10, 30, 60];
+const EXCHANGE_PASSPHRASE_TTL_MS = 60 * 1000;
 
 function stripAnsi(text) {
   return String(text || '').replace(ANSI_PATTERN, '');
@@ -582,12 +80,6 @@ function shortId(value) {
   const text = String(value);
   if (text.length <= 18) return text;
   return `${text.slice(0, 8)}...${text.slice(-6)}`;
-}
-
-function truncateText(value, limit = 64) {
-  const text = String(value || '');
-  if (text.length <= limit) return text;
-  return `${text.slice(0, limit - 1)}…`;
 }
 
 function isAccountPrivacyEnabled() {
@@ -627,19 +119,52 @@ function maskEmailsInText(value) {
 }
 
 function displayAccountName(account) {
-  if (!account) return t('emptyEmail');
+  if (!account) return '未填写邮箱';
   const email = typeof account === 'string' ? account : account.email;
-  return displayEmailValue(email, { fallback: t('emptyEmail') });
+  return displayEmailValue(email, { fallback: '未填写邮箱' });
+}
+
+function isMainWorkspaceLabel(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  return /^(主\s*认证|主\s*工作区|main(?:\s*工作区)?)$/iu.test(text);
+}
+
+function displayWorkspaceLabel(value, fallback = '未命名工作区') {
+  const text = String(value || '').trim();
+  if (!text) return fallback;
+  if (isMainWorkspaceLabel(text)) return 'Main';
+  const withoutSuffix = text.replace(/\s*工作区$/u, '').trim();
+  if (!withoutSuffix) return fallback;
+  return withoutSuffix;
+}
+
+function displayWorkspaceNameForProfile(authProfile, fallback = '未命名') {
+  const label = String(authProfile?.workspace_label || '').trim();
+  const normalized = displayWorkspaceLabel(label, '');
+  if (authProfile?.is_primary && !normalized) return 'Main';
+  return normalized || fallback;
+}
+
+function loginMethodLabel(value) {
+  const mapping = {
+    email: '邮箱登录',
+    google: 'Google 登录',
+    apple: 'Apple 登录',
+    microsoft: 'Microsoft 登录',
+    phone: '手机登录'
+  };
+  return mapping[String(value || '').trim()] || '未设置登录方式';
 }
 
 function stateLabel(account) {
   const mapping = {
-    draft: t('stateDraft'),
-    active: t('stateActive'),
-    ready: t('stateReady'),
-    auth_required: t('stateAuthRequired'),
-    exhausted: t('stateExhausted'),
-    error: t('stateError')
+    draft: '待保存',
+    active: '当前活动',
+    ready: '已认证',
+    auth_required: '待认证',
+    exhausted: '5 小时额度用尽',
+    error: '异常'
   };
   return mapping[account.display_state] || account.display_state || '--';
 }
@@ -658,11 +183,11 @@ function stateTone(value) {
 
 function freshnessLabel(value) {
   const mapping = {
-    live: t('freshnessLive'),
-    stale: t('freshnessStale'),
-    predicted: t('freshnessPredicted')
+    live: '刚刚同步',
+    stale: '等待刷新',
+    predicted: '预测值'
   };
-  return mapping[value] || value || t('freshnessStale');
+  return mapping[value] || value || '等待刷新';
 }
 
 function currentTimeMode() {
@@ -697,13 +222,13 @@ function formatAbsoluteDate(value, options = {}) {
   };
 
   if (options.mode === 'local') {
-    const localText = new Intl.DateTimeFormat(uiLocale(), baseOptions).format(date);
+    const localText = new Intl.DateTimeFormat('zh-CN', baseOptions).format(date);
     const zoneLabel = timeZoneLabelFor(date);
     return zoneLabel ? `${localText} ${zoneLabel}` : localText;
   }
 
   const zone = options.mode === 'server' ? (state.serverTimeZone || 'UTC') : 'UTC';
-  const text = new Intl.DateTimeFormat(uiLocale(), {
+  const text = new Intl.DateTimeFormat('zh-CN', {
     ...baseOptions,
     timeZone: zone
   }).format(date);
@@ -718,16 +243,16 @@ function formatTimestampLines(value, options = {}) {
   const includeSeconds = options.includeSeconds === true;
   const lines = [];
   if (currentTimeMode() === 'local') {
-    lines.push(`${t('localTimeLabel')} ${formatAbsoluteDate(value, {
+    lines.push(`本地时间 ${formatAbsoluteDate(value, {
       mode: 'local',
       includeSeconds
     })}`);
   }
-  lines.push(`${t('serverTimeLabel')} ${formatAbsoluteDate(value, {
+  lines.push(`服务器时间 ${formatAbsoluteDate(value, {
     mode: 'server',
     includeSeconds
   })}`);
-  lines.push(`${t('utcTimeLabel')} ${formatAbsoluteDate(value, {
+  lines.push(`UTC时间 ${formatAbsoluteDate(value, {
     mode: 'utc',
     includeSeconds
   })}`);
@@ -765,38 +290,339 @@ function displayResetLabel(resetLabel, resetAt, options = {}) {
 
 function buildResetTimeBlock(resetLabel, resetAt) {
   if (!resetAt) {
-    return `${t('resetTimeTitle')}\n${t('serverTimeLabel')} ${resetLabel || '--'}\n${t('utcTimeLabel')} ${resetLabel || '--'}`;
+    return `重置时间\n服务器时间 ${resetLabel || '--'}\nUTC时间 ${resetLabel || '--'}`;
   }
-  return `${t('resetTimeTitle')}\n${formatTimestampLines(resetAt, { includeSeconds: false })}`;
+  return `重置时间\n${formatTimestampLines(resetAt, { includeSeconds: false })}`;
 }
 
 function syncTimeDisplayButton() {
   const button = document.getElementById('timeDisplayToggleBtn');
   if (!button) return;
-  button.textContent = currentTimeMode() === 'local' ? t('timeDisplayLocal') : t('timeDisplayServer');
+  button.textContent = currentTimeMode() === 'local' ? '时间显示：本地' : '时间显示：服务器';
 }
 
 function syncAccountPrivacyButton() {
   const button = document.getElementById('accountPrivacyToggleBtn');
   if (!button) return;
-  button.textContent = isAccountPrivacyEnabled() ? t('accountPrivacyOn') : t('accountPrivacyOff');
+  button.textContent = isAccountPrivacyEnabled() ? '账号隐私：开' : '账号隐私：关';
 }
 
-function syncLanguageButton() {
-  const button = document.getElementById('languageToggleBtn');
+function syncAutoSwitchButton() {
+  const button = document.getElementById('autoSwitchToggleBtn');
   if (!button) return;
-  button.textContent = t('languageToggle');
+  button.textContent = state.settings && state.settings.autoSwitchEnabled ? '自动切换：开' : '自动切换：关';
+}
+
+function currentExchangePassphrase() {
+  return String(
+    document.getElementById('exchangeImportPassphraseInput')?.value
+      || document.getElementById('exchangePassphraseInput')?.value
+      || ''
+  ).trim();
+}
+
+function exchangePassphraseInputs() {
+  return ['exchangePassphraseInput', 'exchangeImportPassphraseInput']
+    .map((id) => document.getElementById(id))
+    .filter(Boolean);
+}
+
+function setExchangePassphraseValue(value = '') {
+  const text = String(value || '');
+  exchangePassphraseInputs().forEach((input) => {
+    input.value = text;
+  });
+}
+
+function updateExchangePassphraseMeta() {
+  const node = document.getElementById('exchangePassphraseMeta');
+  if (!node) return;
+  if (!state.exchangeDestroyAt || !currentExchangePassphrase()) {
+    node.textContent = '可手动输入已有口令，或点击生成后在 60 秒内使用';
+    return;
+  }
+  const seconds = Math.max(0, Math.ceil((state.exchangeDestroyAt - Date.now()) / 1000));
+  node.textContent = `${seconds}s 后自动销毁当前口令`;
+}
+
+function clearExchangePassphrase(options = {}) {
+  if (state.exchangeDestroyTimer) {
+    window.clearInterval(state.exchangeDestroyTimer);
+    state.exchangeDestroyTimer = null;
+  }
+  state.exchangeDestroyAt = null;
+  if (options.preserveValue !== true) setExchangePassphraseValue('');
+  updateExchangePassphraseMeta();
+}
+
+function armExchangePassphraseDestroyTimer() {
+  if (state.exchangeDestroyTimer) window.clearInterval(state.exchangeDestroyTimer);
+  state.exchangeDestroyAt = Date.now() + EXCHANGE_PASSPHRASE_TTL_MS;
+  updateExchangePassphraseMeta();
+  state.exchangeDestroyTimer = window.setInterval(() => {
+    if (!state.exchangeDestroyAt || Date.now() < state.exchangeDestroyAt) {
+      updateExchangePassphraseMeta();
+      return;
+    }
+    clearExchangePassphrase();
+    showToast('交换口令已自动销毁，请按需重新生成', 'warning');
+  }, 1000);
+}
+
+function isExchangeModalOpen() {
+  return document.body.classList.contains('has-exchange-modal');
+}
+
+function setExchangeStatus(message = '', tone = 'info') {
+  state.exchangeStatus = message ? { message, tone } : null;
+  const node = document.getElementById('exchangeStatusBox');
+  if (!node) return;
+  if (!message) {
+    node.className = 'exchange-modal__status hidden';
+    node.textContent = '';
+    return;
+  }
+  node.className = `exchange-modal__status exchange-modal__status--${tone}`;
+  node.textContent = message;
+}
+
+function openExchangeModal() {
+  const modal = document.getElementById('exchangeModal');
+  if (!modal) return;
+  setExchangeStatus();
+  modal.classList.add('is-open');
+  modal.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('has-exchange-modal');
+}
+
+function closeExchangeModal() {
+  const modal = document.getElementById('exchangeModal');
+  if (!modal) return;
+  modal.classList.remove('is-open');
+  modal.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('has-exchange-modal');
+  const fileInput = document.getElementById('exchangeFileInput');
+  if (fileInput) fileInput.value = '';
+  setExchangeStatus();
+  clearExchangePassphrase();
+}
+
+async function generateExchangePassphrase() {
+  const json = await api('/api/exchange/passphrase', { method: 'GET' });
+  setExchangePassphraseValue(json.passphrase || '');
+  armExchangePassphraseDestroyTimer();
+  return json.passphrase || '';
+}
+
+function currentRefreshIntervalMs() {
+  return Math.max(0, Number(state.refreshSeconds || 0)) * 1000;
+}
+
+function isAutoRefreshEnabled() {
+  return Number(state.refreshSeconds || 0) > 0;
+}
+
+function syncRefreshControls() {
+  const select = document.getElementById('refreshIntervalSelect');
+  const customInput = document.getElementById('refreshCustomInput');
+  if (!select || !customInput) return;
+  const value = Number(state.refreshSeconds || 0);
+  if (REFRESH_PRESET_VALUES.includes(value)) {
+    select.value = String(value);
+    customInput.classList.add('hidden');
+  } else {
+    select.value = 'custom';
+    customInput.classList.remove('hidden');
+    customInput.value = String(value || 10);
+  }
+}
+
+function setRefreshSeconds(nextValue) {
+  const numeric = Math.trunc(Number(nextValue));
+  if (!Number.isFinite(numeric)) return;
+  const clamped = Math.max(0, Math.min(600, numeric));
+  state.refreshSeconds = clamped;
+  state.refreshCountdown = clamped;
+  try {
+    window.localStorage.setItem(REFRESH_SECONDS_STORAGE_KEY, String(clamped));
+  } catch (_) {
+    // ignore localStorage failures
+  }
+  syncRefreshControls();
+  startRuntimeRefreshLoop();
+  renderRefreshNote();
+}
+
+function syncAccountFilterControls() {
+  const searchInput = document.getElementById('accountSearchInput');
+  const sortSelect = document.getElementById('accountSortSelect');
+  const filterSelect = document.getElementById('accountFilterSelect');
+  const loginMethodFilterSelect = document.getElementById('accountLoginMethodFilterSelect');
+  if (searchInput) searchInput.value = state.accountSearch;
+  if (sortSelect) sortSelect.value = state.accountSort;
+  if (filterSelect) filterSelect.value = state.accountFilter;
+  if (loginMethodFilterSelect) loginMethodFilterSelect.value = state.accountLoginMethodFilter;
+}
+
+function persistAccountFilterState() {
+  try {
+    window.localStorage.setItem(ACCOUNT_SEARCH_STORAGE_KEY, state.accountSearch);
+    window.localStorage.setItem(ACCOUNT_FILTER_STORAGE_KEY, state.accountFilter);
+    window.localStorage.setItem(ACCOUNT_LOGIN_METHOD_FILTER_STORAGE_KEY, state.accountLoginMethodFilter);
+  } catch (_) {
+    // ignore localStorage failures
+  }
+}
+
+function resetAccountFiltersForNewAccount() {
+  state.accountSearch = '';
+  state.accountFilter = 'all';
+  state.accountLoginMethodFilter = 'all';
+  persistAccountFilterState();
+  syncAccountFilterControls();
+}
+
+function refreshStatusText() {
+  const refreshState = state.runtime && state.runtime.runtimeRefresh ? state.runtime.runtimeRefresh : {};
+  if (refreshState.state === 'syncing' || state.refreshPending) return '后台刷新中';
+  if (!state.runtime) return '等待首次快照';
+  if (!isAutoRefreshEnabled()) return '自动刷新已关闭';
+  return `${state.refreshCountdown}s 后自动刷新`;
+}
+
+function displayPlanType(value) {
+  const text = String(value || '').trim();
+  return text || '暂未识别';
+}
+
+function describePlanTypeSource(source = {}) {
+  if (source.failedCount) return `有 ${source.failedCount} 个账号同步失败`;
+  return '后端同步正常';
+}
+
+function interactiveRecoveryStateLabel(value) {
+  const mapping = {
+    idle: '空闲',
+    pending: '检测到中断',
+    switching: '自动切换中',
+    queued: '已排队',
+    recovering: '恢复原线程',
+    resuming: '自动续跑中',
+    completed: '已恢复',
+    cancelled: '已取消',
+    blocked: '无可用账号',
+    no_candidate: '无可用账号',
+    healthy: '正常',
+    busy: '等待切换',
+    disabled: '已关闭',
+    failed: '恢复失败'
+  };
+  return mapping[String(value || '').trim()] || (String(value || '').trim() || '空闲');
+}
+
+function interactiveRecoveryTone(value) {
+  const normalized = String(value || '').trim();
+  if (['switching', 'queued', 'recovering', 'resuming', 'pending', 'busy'].includes(normalized)) return 'warning';
+  if (['blocked', 'no_candidate', 'failed'].includes(normalized)) return 'danger';
+  if (['completed', 'healthy'].includes(normalized)) return 'healthy';
+  return 'unknown';
+}
+
+function interruptionReasonLabel(value) {
+  const mapping = {
+    quota_exhausted_after_completion: '本轮完成后额度耗尽',
+    quota_exhausted_during_run: '执行中额度耗尽',
+    auth_required: '需要重新认证',
+    auth_required_during_run: '执行中掉出认证',
+    compression_paused: '压缩后被认证墙打断',
+    composer_unavailable: '输入区不可用'
+  };
+  return mapping[String(value || '').trim()] || (String(value || '').trim() || '未记录');
+}
+
+function describeInteractiveRecoverySummary(recovery = {}) {
+  const parts = [];
+  if (recovery.lastInterruptionReason) parts.push(interruptionReasonLabel(recovery.lastInterruptionReason));
+  if (recovery.switchTargetSlotId) parts.push(`目标 ${slotLabelById(recovery.switchTargetSlotId)}`);
+  const session = recovery.primaryBridgeSession || null;
+  if (session) {
+    if (session.focused) parts.push('主标签页在线');
+    else if (session.visible) parts.push('标签页可见');
+    else parts.push('标签页待激活');
+  }
+  return parts.join(' · ') || '等待新的中断信号';
+}
+
+function describeInteractiveRecoveryDetail(recovery = {}) {
+  const parts = [];
+  if (recovery.lastInterruptionReason) parts.push(`原因：${interruptionReasonLabel(recovery.lastInterruptionReason)}`);
+  if (recovery.switchTargetSlotId) parts.push(`切换目标：${slotLabelById(recovery.switchTargetSlotId)}`);
+  const session = recovery.primaryBridgeSession || null;
+  if (session && session.threadTitle) parts.push(`线程：${session.threadTitle}`);
+  if (session && session.lastSeenAt) parts.push(`桥接心跳 ${formatTimestamp(session.lastSeenAt, { includeSeconds: true })}`);
+  if (!parts.length) return '当前没有待恢复的交互中断';
+  return parts.join(' · ');
+}
+
+function renderRefreshNote() {
+  const note = document.getElementById('autoRefreshNote');
+  if (!note) return;
+  const refreshState = state.runtime && state.runtime.runtimeRefresh ? state.runtime.runtimeRefresh : null;
+  const finishedAt = refreshState && refreshState.finished_at ? formatTimestamp(refreshState.finished_at, { includeSeconds: true }) : '--';
+  note.textContent = `刷新日志：${refreshStatusText()} · 最近完成 ${finishedAt}`;
+}
+
+function updateSettingsFromRuntime(runtime) {
+  const settings = runtime && runtime.settings ? runtime.settings : {};
+  state.settings.autoSwitchEnabled = !!settings.auto_switch_enabled;
+  syncAutoSwitchButton();
+}
+
+async function acknowledgeRuntimeAlert(alertId) {
+  if (!alertId || state.presentedAlertIds.has(alertId)) return;
+  state.presentedAlertIds.add(alertId);
+  try {
+    await api(`/api/runtime/alerts/${encodeURIComponent(alertId)}/ack`, {
+      method: 'POST',
+      body: '{}'
+    });
+  } catch (_) {
+    // ignore alert ack failures
+  }
+}
+
+function presentRuntimeAlerts(runtime) {
+  const alerts = Array.isArray(runtime && runtime.alerts) ? runtime.alerts : [];
+  const alert = alerts[0];
+  if (!alert || state.presentedAlertIds.has(alert.id)) return;
+  window.alert(`${alert.title}\n\n${alert.message}`);
+  void acknowledgeRuntimeAlert(alert.id);
+}
+
+function maybeRequestInitialRefresh() {
+  if (state.initialRefreshRequested || !state.runtime || !isAutoRefreshEnabled()) return;
+  const refreshState = state.runtime.runtimeRefresh || {};
+  if (refreshState.state === 'syncing') {
+    state.initialRefreshRequested = true;
+    return;
+  }
+  const hasStaleSlot = Array.isArray(state.runtime.slots) && state.runtime.slots.some((slot) => slot.needs_refresh);
+  if (!hasStaleSlot) return;
+  state.initialRefreshRequested = true;
+  triggerRuntimeRefresh('initial_dashboard', {
+    slotId: state.selectedAccountId || null
+  }).catch(console.error);
 }
 
 function bootstrapStatusText(status) {
   const mapping = {
-    starting: t('bootstrapStarting'),
-    awaiting_user: t('bootstrapAwaitingUser'),
-    success_pending_capture: t('bootstrapVerifying'),
-    succeeded: t('bootstrapVerifying'),
-    captured: t('bootstrapCaptured'),
-    failed: t('bootstrapFailed'),
-    retrying_wrong_account: t('bootstrapRetrying')
+    starting: '准备中',
+    awaiting_user: '等待认证',
+    success_pending_capture: '校验身份中',
+    succeeded: '校验身份中',
+    captured: '已完成',
+    failed: '已失败',
+    retrying_wrong_account: '重试中'
   };
   return mapping[status] || status || '--';
 }
@@ -814,11 +640,14 @@ async function startBootstrapTask(slotId, options = {}) {
       ? `/api/accounts/${slotId}/bootstrap/restart`
       : `/api/accounts/${slotId}/bootstrap`,
     {
-    method: 'POST',
-    body: '{}'
+      method: 'POST',
+      body: JSON.stringify({
+        authProfileId: options.authProfileId || null,
+        workspaceLabel: options.workspaceLabel || null
+      })
     }
   );
-  scheduleRuntimeReload(10, { fast: true, includeLogs: false });
+  scheduleRuntimeReload(10, { includeLogs: false });
   scheduleRuntimeReload(220);
   return result;
 }
@@ -844,6 +673,14 @@ function scheduleRuntimeReload(delay = 0, options = {}) {
     const nextOptions = state.runtimeReloadOptions || {};
     state.runtimeReloadOptions = null;
     loadRuntime(nextOptions).catch(console.error);
+  }, delay);
+}
+
+function scheduleDeferredLogsLoad(delay = 420) {
+  if (state.deferredLogsLoadTimer) window.clearTimeout(state.deferredLogsLoadTimer);
+  state.deferredLogsLoadTimer = window.setTimeout(() => {
+    state.deferredLogsLoadTimer = null;
+    loadRuntime().catch(console.error);
   }, delay);
 }
 
@@ -891,8 +728,8 @@ function quotaRemainingPct(pct) {
 
 function quotaRemainingText(pct) {
   const remaining = quotaRemainingPct(pct);
-  if (remaining == null) return `${t('remainingLabel')} --`;
-  return t('remainingApprox', { pct: `${remaining}` });
+  if (remaining == null) return '剩余 --';
+  return `约剩余 ${remaining}%`;
 }
 
 function quotaRgb(pct) {
@@ -941,6 +778,29 @@ function buildQuotaSignal(label, pct) {
   `;
 }
 
+function buildAccountIndexSignals(account) {
+  const profiles = Array.isArray(account.auth_profiles) ? account.auth_profiles.filter(Boolean) : [];
+  const resolvedProfiles = profiles.length
+    ? profiles
+    : [{
+        workspace_label: account.active_workspace_label || account.primary_workspace_label || 'Main',
+        quota_5h_pct: account.quota_5h_pct,
+        quota_week_pct: account.quota_week_pct,
+        is_primary: true
+      }];
+  return `
+    <div class="account-index-signal-list">
+      ${resolvedProfiles.map((authProfile) => `
+        <div class="account-index-signal-row">
+          <span class="account-index-signal-row__label" title="${escapeHtml(displayWorkspaceNameForProfile(authProfile, 'Main'))}">${escapeHtml(displayWorkspaceNameForProfile(authProfile, 'Main'))}</span>
+          ${buildQuotaSignal('5小时', authProfile.quota_5h_pct)}
+          ${buildQuotaSignal('1周', authProfile.quota_week_pct)}
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
 function logStateItems(kind) {
   return kind === 'switch' ? (state.recentSwitches || []) : (state.recentSamples || []);
 }
@@ -956,7 +816,7 @@ function jumpToLogPage(kind) {
   if (!input || !items.length) return;
   const raw = Number(input.value);
   if (!Number.isFinite(raw) || raw < 1) {
-    showToast(t('inputValidPage'), 'warning');
+    showToast('请输入有效页码', 'warning');
     input.focus();
     return;
   }
@@ -968,13 +828,8 @@ function jumpToLogPage(kind) {
 }
 
 function buildQuotaSignalTitle(label, pct) {
-  if (pct == null) return t('quotaNoDataLine', { label });
-  return t('quotaLineDescription', {
-    label,
-    used: quotaValueText(pct),
-    remaining: quotaRemainingText(pct),
-    reset: '--'
-  });
+  if (pct == null) return `${label} 暂无额度数据`;
+  return `${label}已用 ${quotaValueText(pct)}，${quotaRemainingText(pct)}`;
 }
 
 function quotaGaugeTrackColor(pct) {
@@ -1021,17 +876,63 @@ function parseJsonSafe(text) {
   }
 }
 
+function extractErrorMessage(value) {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return '';
+    if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+      const parsed = parseJsonSafe(text);
+      if (parsed && parsed !== value) return extractErrorMessage(parsed);
+    }
+    return text;
+  }
+  if (value == null) return '';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    return extractErrorMessage(value.error)
+      || extractErrorMessage(value.message)
+      || extractErrorMessage(value.code)
+      || (() => {
+        try {
+          return JSON.stringify(value);
+        } catch (_) {
+          return String(value);
+        }
+      })();
+  }
+  return String(value).trim();
+}
+
 function humanizeBackendError(rawText) {
-  const text = String(rawText || '');
-  if (!text) return t('backendQuotaMissing');
-  if (/deactivated_workspace/i.test(text)) return t('backendWorkspaceDeactivated');
-  if (/WHAM_REQUEST_FAILED_401/i.test(text)) return t('backendLoginExpired');
+  const text = extractErrorMessage(rawText);
+  if (text === 'UNKNOWN_BACKEND_ERROR') return '后端返回了不完整的错误响应，请重新操作一次；如果反复出现，我会继续沿着 server / agent 日志追具体原因';
+  if (!text || text === '[object Object]') return '这条历史错误记录没有把原始原因展开完整；我已经修了新写入链路。请重新操作一次，新的错误会显示得更具体';
+  if (/refresh_token_reused/i.test(text) || /refresh token has already been used to generate a new access token/i.test(text)) return '这个工作区的旧登录令牌已经失效了，通常是因为这份认证已经被新的登录态替换；请重新认证这个工作区';
+  if (text === 'WORKSPACE_ALREADY_EXISTS') return '创建工作区失败，工作区已存在，请去对应工作区点重新认证';
+  if (/^WORKSPACE_ALREADY_EXISTS:/i.test(text)) return text.replace(/^WORKSPACE_ALREADY_EXISTS:\s*/i, '');
+  if (text === 'WORKSPACE_REAUTH_TARGET_MISMATCH') return '这次认证结果不属于目标工作区，系统不会自动覆盖别的工作区；请在正确的工作区卡片里点重新认证';
+  if (/^WORKSPACE_REAUTH_TARGET_MISMATCH:/i.test(text)) return text.replace(/^WORKSPACE_REAUTH_TARGET_MISMATCH:\s*/i, '');
+  if (text === 'ACCOUNT_EMAIL_DUPLICATE') return '已存在同邮箱账号，请直接使用原账号，或在原账号下新增工作区';
+  if (text === 'WORKSPACE_LABEL_DUPLICATE') return '同一个账号下不能有两个同名工作区，请换一个工作区名称';
+  if (/^WORKSPACE_LABEL_DUPLICATE:/i.test(text)) return text.replace(/^WORKSPACE_LABEL_DUPLICATE:\s*/i, '');
+  if (text === 'EXCHANGE_DECRYPT_FAILED') return '交换文件解密失败，通常是口令不正确';
+  if (text === 'UNSUPPORTED_ENCRYPTION') return '交换文件的加密方式当前不受支持';
+  if (text === 'EXCHANGE_DUPLICATE_WORKSPACE') return '导入失败：目标账号下已经存在同名工作区';
+  if (text === 'EXCHANGE_PROFILE_CONFLICT_OTHER_ACCOUNT') return '导入失败：交换文件中的工作区身份已绑定到另一个账号';
+  if (text === 'FORBIDDEN') return '认证代理拒绝了请求，请检查本地 agent 共享密钥或代理权限配置';
+  if (text === 'AUTH_AGENT_FORBIDDEN') return '认证代理拒绝了请求，请检查本地 agent 共享密钥或代理权限配置';
+  if (text === 'AUTH_AGENT_UNAVAILABLE') return '认证代理暂时不可用，请确认本地 agent 进程与 socket 已正常启动';
+  if (text === 'AGENT_REQUEST_TIMEOUT') return '认证代理响应超时，请稍后重试';
+  if (/device auth timed out after 15 minutes/i.test(text)) return '设备码认证已超时（15 分钟），请重新认证并在 15 分钟内完成登录';
+  if (/device-auth exited with code 1/i.test(text) || /device auth exited unexpectedly/i.test(text)) return 'Codex 登录进程提前退出了，请重新认证；如果连续出现，请检查本机 Codex CLI 登录环境';
+  if (/deactivated_workspace/i.test(text)) return '工作区已失效，后端暂时无法读取这个账号的实时额度';
+  if (/WHAM_REQUEST_FAILED_401/i.test(text)) return '后端登录态已失效，暂时无法读取实时额度';
   const match = text.match(/backend_usage_fetch_failed :: (.+)$/i);
   return maskEmailsInText(match ? match[1] : text);
 }
 
 function slotLabelById(slotId) {
-  if (!slotId) return t('untrackedAccount');
+  if (!slotId) return '未归档账号';
   const slots = state.runtime && Array.isArray(state.runtime.slots) ? state.runtime.slots : [];
   const slot = slots.find((item) => item.id === slotId);
   if (!slot) return slotId;
@@ -1043,14 +944,14 @@ function slotMetaById(slotId) {
   const slots = state.runtime && Array.isArray(state.runtime.slots) ? state.runtime.slots : [];
   const slot = slots.find((item) => item.id === slotId);
   if (!slot) return slotId;
-  return slot.login_method === 'google' ? t('googleLogin') : t('emailLogin');
+  return loginMethodLabel(slot.login_method);
 }
 
 function switchStatusLabel(status) {
   const mapping = {
-    starting: t('switchInProgress'),
-    completed: t('switchCompleted'),
-    failed: t('switchFailed')
+    starting: '进行中',
+    completed: '已完成',
+    failed: '失败'
   };
   return mapping[status] || status || '--';
 }
@@ -1063,17 +964,17 @@ function switchStatusTone(status) {
 
 function switchReasonLabel(reason) {
   const mapping = {
-    manual_switch: t('switchReasonManual'),
-    auto_switch: t('switchReasonAuto'),
-    bootstrap_capture: t('switchReasonCapture')
+    manual_switch: '手动切换',
+    auto_switch: '自动切换',
+    bootstrap_capture: '认证接管'
   };
-  return mapping[reason] || reason || '--';
+  return mapping[reason] || reason || '未知原因';
 }
 
 function quotaSyncStatusLabel(status) {
-  if (status === 'ok') return t('quotaSyncSuccess');
-  if (status === 'error') return t('quotaSyncFailed');
-  return t('quotaSyncWaiting');
+  if (status === 'ok') return '同步成功';
+  if (status === 'error') return '同步失败';
+  return '等待同步';
 }
 
 function quotaSyncStatusTone(status) {
@@ -1082,36 +983,17 @@ function quotaSyncStatusTone(status) {
   return 'warning';
 }
 
-function probeStatusText(status) {
-  if (status === 'ok') return t('probeStatusOk');
-  if (status === 'error') return t('probeStatusError');
-  if (status === 'pending') return t('probeStatusPending');
-  return t('probeStatusIdle');
-}
-
-function probeStatusTone(status) {
-  if (status === 'ok') return 'healthy';
-  if (status === 'error') return 'expired';
-  if (status === 'pending') return 'warning';
-  return 'unknown';
-}
-
 function quotaLineDescription(label, pct, resetLabel, resetAt) {
-  if (pct == null) return t('quotaNoDataLine', { label });
-  return t('quotaLineDescription', {
-    label,
-    used: quotaValueText(pct),
-    remaining: quotaRemainingText(pct),
-    reset: displayResetLabel(resetLabel, resetAt, { includeUtc: true })
-  });
+  if (pct == null) return `${label} 暂无可用数据`;
+  return `${label}已用 ${quotaValueText(pct)}，${quotaRemainingText(pct)}，${displayResetLabel(resetLabel, resetAt, { includeUtc: true })} 重置`;
 }
 
 function buildQuotaGaugeCard(label, pct, resetLabel, resetAt, options = {}) {
   const remaining = quotaRemainingPct(pct);
   const tone = quotaTone(pct);
-  const usedText = pct == null ? `${t('usedSuffix')} --` : `${quotaValueText(pct)} ${t('usedSuffix')}`;
+  const usedText = pct == null ? '已用 --' : `${quotaValueText(pct)} 已用`;
   const note = pct == null
-    ? t('noQuotaData')
+    ? '后端暂时没有返回这项额度'
     : buildResetTimeBlock(resetLabel, resetAt);
   return `
     <article class="quota-gauge-card ${options.compact ? 'quota-gauge-card--compact' : 'quota-gauge-card--hero'} ${tone}">
@@ -1124,7 +1006,7 @@ function buildQuotaGaugeCard(label, pct, resetLabel, resetAt, options = {}) {
           ${buildGaugeSvg(pct, options.compact)}
           <div class="quota-gauge__inner">
             <strong>${remaining == null ? '--' : `${remaining}%`}</strong>
-            <small>${t('remainingLabel')}</small>
+            <small>剩余</small>
           </div>
         </div>
       </div>
@@ -1165,8 +1047,8 @@ function updateLogPager(kind, totalItems, currentPage, totalPages) {
   pageInfo.classList.toggle('disabled', totalItems === 0);
   pageInfo.dataset.totalPages = String(totalPages);
   pageInfo.dataset.currentPage = String(currentPage);
-  pageText.textContent = totalItems === 0 ? t('emptyPageInfo') : `${currentPage} / ${totalPages}`;
-  pageMeta.textContent = totalItems === 0 ? '' : (currentUiLanguage() === 'en' ? `${totalItems} total` : `共 ${totalItems} 条`);
+  pageText.textContent = totalItems === 0 ? '暂无记录' : `${currentPage} / ${totalPages} 页`;
+  pageMeta.textContent = totalItems === 0 ? '' : `共 ${totalItems} 条`;
   if (jumpInput) {
     jumpInput.disabled = totalItems === 0;
     jumpInput.min = '1';
@@ -1207,6 +1089,18 @@ function showToast(message, tone = 'success') {
   }, 2200);
 }
 
+function downloadJsonFile(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 0);
+}
+
 function setButtonBusy(button, pendingText) {
   if (!button) return () => {};
   const previousDisabled = button.disabled;
@@ -1224,21 +1118,36 @@ function setButtonBusy(button, pendingText) {
 }
 
 function explainError(error) {
-  if (!error || !error.message) return t('operationFailed');
-  if (error.message === 'INVALID_CREDENTIALS') return t('invalidCredentials');
-  if (error.message === 'ACCOUNT_LOCKED') return t('accountLocked');
-  if (error.message === 'DEVICE_AUTH_RATE_LIMITED') return t('deviceAuthRateLimited');
-  if (error.message === 'BOOTSTRAP_ALREADY_ACTIVE') {
+  const message = extractErrorMessage(error && error.message ? error.message : error);
+  if (message === 'UNKNOWN_BACKEND_ERROR') return '操作失败，后端返回了不完整的错误响应，请重试一次';
+  if (!message || message === '[object Object]') return '操作失败，这次返回的是一条没有展开完整的历史错误；请重试一次，我现在会尽量给出具体原因';
+  if (/refresh_token_reused/i.test(message) || /refresh token has already been used to generate a new access token/i.test(message)) return '这个工作区的旧登录令牌已经失效了，请重新认证这个工作区';
+  if (message === 'SESSION_COOKIE_NOT_PERSISTED') return '登录态没有成功写入浏览器，请检查 Cookie 域名或 secure 配置';
+  if (message === 'PASSPHRASE_REQUIRED') return '请输入交换口令后再继续';
+  if (message === 'UNSUPPORTED_EXCHANGE_SCHEMA') return '交换文件版本不受支持';
+  if (message === 'EXCHANGE_DECRYPT_FAILED') return '交换文件解密失败，请检查交换口令';
+  if (message === 'UNSUPPORTED_ENCRYPTION') return '交换文件使用了当前不支持的加密方式';
+  if (message === 'EXCHANGE_DUPLICATE_WORKSPACE') return '导入失败：目标账号下已经存在同名工作区';
+  if (message === 'EXCHANGE_PROFILE_CONFLICT_OTHER_ACCOUNT') return '导入失败：交换文件中的工作区已经绑定到另一个账号';
+  if (message === 'INVALID_EXCHANGE_PAYLOAD' || message === 'EXCHANGE_IMPORT_FAILED') return '交换文件无法解析，或口令不正确';
+  if (message === 'DEVICE_AUTH_RATE_LIMITED') return '设备码请求过于频繁，请等待一分钟后再试，或先删除当前认证任务';
+  if (message === 'BOOTSTRAP_ALREADY_ACTIVE') {
     const currentPendingBootstrap = activeBootstrapSession();
-    return t('hintAuthBlocked', {
-      email: displayEmailValue(currentPendingBootstrap && currentPendingBootstrap.email, { fallback: '--' })
-    });
+    return `当前已经有认证任务在进行：${displayEmailValue(currentPendingBootstrap && currentPendingBootstrap.email, { fallback: '另一个账号' })}；请先完成或删除当前任务`;
   }
-  if (error.message === 'ACTIVE_ACCOUNT_CANNOT_BE_DELETED') return t('activeAccountCannotDelete');
-  if (error.message === 'ACTIVE_ACCOUNT_MUST_EXIT_FIRST') return t('activeAccountMustExitFirst');
-  if (error.message === 'ACCOUNT_DATA_INCOMPLETE') return t('accountDataIncomplete');
-  if (error.message === 'PROFILE_NOT_FOUND') return t('profileNotFound');
-  return maskEmailsInText(error.message);
+  if (message === 'FORBIDDEN') return '认证代理拒绝了请求，请检查本地 agent 共享密钥或代理权限配置';
+  if (message === 'AUTH_AGENT_FORBIDDEN') return '认证代理拒绝了请求，请检查本地 agent 共享密钥或代理权限配置';
+  if (message === 'AUTH_AGENT_UNAVAILABLE') return '认证代理暂时不可用，请确认本地 agent 进程与 socket 已正常启动';
+  if (message === 'AGENT_REQUEST_TIMEOUT') return '认证代理响应超时，请稍后重试';
+  if (message === 'ACTIVE_ACCOUNT_CANNOT_BE_DELETED') return '当前正在使用的账号不能删除，请先切换或退出';
+  if (message === 'ACTIVE_ACCOUNT_MUST_EXIT_FIRST') return '当前正在使用的账号不能直接修改邮箱或登录方式，请先退出';
+  if (message === 'ACCOUNT_DATA_INCOMPLETE') return '请先把邮箱、登录方式和订阅到期日填写完整并保存';
+  if (message === 'PROFILE_NOT_FOUND') return '这个账号还没有服务器留存，请先认证';
+  if (message === 'ACCOUNT_EMAIL_DUPLICATE') return '已存在同邮箱账号，请不要重复创建；如需新增认证，请在原账号下新增工作区';
+  if (message === 'WORKSPACE_LABEL_DUPLICATE') return '同一个账号下不能有两个同名工作区，请换一个工作区名称';
+  if (message === 'WORKSPACE_ALREADY_EXISTS') return '创建工作区失败，工作区已存在，请去对应工作区点重新认证';
+  if (message === 'WORKSPACE_REAUTH_TARGET_MISMATCH') return '这次认证结果不属于目标工作区，请在正确的工作区卡片里点重新认证';
+  return humanizeBackendError(message);
 }
 
 async function runButtonAction(button, options, action) {
@@ -1261,6 +1170,10 @@ async function runButtonAction(button, options, action) {
 }
 
 async function api(path, options = {}) {
+  return apiInternal(path, options, false);
+}
+
+async function apiInternal(path, options = {}, retried = false) {
   const method = String(options.method || 'GET').toUpperCase();
   if (!state.csrf && method !== 'GET' && method !== 'HEAD') {
     await refreshCsrf().catch(() => {});
@@ -1276,9 +1189,42 @@ async function api(path, options = {}) {
   });
   const json = await response.json().catch(() => ({}));
   if (!response.ok || json.ok === false) {
-    throw new Error(json.error || `Request failed: ${response.status}`);
+    if (!retried && method !== 'GET' && method !== 'HEAD' && (response.status === 403 || json.error === 'BAD_CSRF')) {
+      await refreshCsrf().catch(() => {});
+      return apiInternal(path, options, true);
+    }
+    throw new Error(extractErrorMessage(json.error) || `Request failed: ${response.status}`);
   }
   return json;
+}
+
+async function triggerRuntimeRefresh(trigger = 'manual', extra = {}) {
+  const runtimeRefresh = state.runtime && state.runtime.runtimeRefresh ? state.runtime.runtimeRefresh : null;
+  if (state.refreshPending || (runtimeRefresh && runtimeRefresh.state === 'syncing')) return;
+  state.refreshPending = true;
+  if (state.runtime) {
+    state.runtime.runtimeRefresh = {
+      ...(state.runtime.runtimeRefresh || {}),
+      state: 'syncing',
+      trigger,
+      started_at: new Date().toISOString()
+    };
+  }
+  renderRefreshNote();
+  try {
+    await api('/api/runtime/refresh', {
+      method: 'POST',
+      body: JSON.stringify({
+        trigger,
+        slotId: extra.slotId || null
+      })
+    });
+    state.refreshCountdown = Number(state.refreshSeconds || 0);
+    scheduleRuntimeReload(80, { includeLogs: false });
+  } finally {
+    state.refreshPending = false;
+    renderRefreshNote();
+  }
 }
 
 async function refreshCsrf() {
@@ -1288,241 +1234,57 @@ async function refreshCsrf() {
 
 function setSessionBadge(text) {
   const value = String(text || '').trim();
-  if (value && value !== t('sessionLoggedOut')) state.sessionEmail = value;
+  if (value && value !== '未登录') state.sessionEmail = value;
   document.getElementById('sessionBadge').textContent = displayEmailValue(value, { fallback: value || '--' });
-}
-
-function formatDateOnly(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '--';
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(raw)
-    ? new Date(`${raw}T23:59:59.999Z`)
-    : new Date(raw);
-  if (Number.isNaN(date.getTime())) return raw;
-  return new Intl.DateTimeFormat(uiLocale(), {
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric',
-    timeZone: 'UTC'
-  }).format(date);
-}
-
-function buildSubscriptionLabel(account) {
-  const raw = String(account && account.expires_at || '').trim();
-  if (!raw) return t('subscriptionUnset');
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(raw)
-    ? new Date(`${raw}T23:59:59.999Z`)
-    : new Date(raw);
-  if (Number.isNaN(date.getTime())) return t('subscriptionUnset');
-  const diffMs = date.getTime() - Date.now();
-  const daysRemaining = Math.ceil(diffMs / DAY_MS);
-  const displayDate = formatDateOnly(raw);
-  if (diffMs < 0) return t('subscriptionExpiredOn', { date: displayDate });
-  if (daysRemaining <= 3) return t('subscriptionExpiringIn', { days: daysRemaining });
-  return t('subscriptionValidUntil', { date: displayDate });
-}
-
-function currentWorkspaceUrl() {
-  return String(state.publicConfig && state.publicConfig.codeWorkspaceUrl || '').trim();
-}
-
-function currentWorkspaceDefaultFolder() {
-  const url = currentWorkspaceUrl();
-  if (!url) return '';
-  try {
-    return new URL(url).searchParams.get('folder') || '';
-  } catch (_) {
-    return '';
-  }
-}
-
-function renderWorkspaceGuide() {
-  const host = document.getElementById('workspaceGuideHost');
-  if (!host) return;
-  const workspaceUrl = currentWorkspaceUrl();
-  const defaultFolder = currentWorkspaceDefaultFolder();
-  const folderHint = defaultFolder === '/workspace'
-    ? t('workspaceGuideStepBundled')
-    : t('workspaceGuideStepExternal');
-
-  host.innerHTML = `
-    <section class="workspace-banner">
-      <div class="workspace-banner__copy">
-        <strong>${t('workspaceGuideTitle')}</strong>
-        <p class="muted">${workspaceUrl ? t('workspaceGuideLead') : t('workspaceGuideNoUrl')}</p>
-        ${workspaceUrl ? `
-          <div class="workspace-guide-grid">
-            <p>${t('workspaceGuideStepOpen')}</p>
-            <p>${folderHint}</p>
-            <p>${t('workspaceGuideStepRefresh')}</p>
-            <p>${t('workspaceGuideStepChat')}</p>
-          </div>
-        ` : ''}
-      </div>
-      ${workspaceUrl ? `
-        <div class="workspace-banner__actions">
-          <a class="primary workspace-banner__link" href="${escapeHtml(workspaceUrl)}" target="_blank" rel="noopener">${t('workspaceGuideOpen')}</a>
-          <button type="button" class="ghost" id="copyWorkspaceLinkBtn">${t('workspaceGuideCopy')}</button>
-        </div>
-      ` : ''}
-    </section>
-  `;
-
-  const copyButton = document.getElementById('copyWorkspaceLinkBtn');
-  if (!copyButton) return;
-  copyButton.onclick = async () => {
-    try {
-      await navigator.clipboard.writeText(workspaceUrl);
-      showToast(t('copiedWorkspaceLink'), 'success');
-    } catch (_) {
-      showToast(workspaceUrl, 'warning');
-    }
-  };
-}
-
-function renderDashboardSettings() {
-  const settings = runtimeSettings();
-  const refreshSelect = document.getElementById('refreshIntervalSelect');
-  const probeModeSelect = document.getElementById('probeModeSelect');
-  const probeIntervalSelect = document.getElementById('probeIntervalSelect');
-  const autoRefreshNote = document.getElementById('autoRefreshNote');
-  const refreshLabel = document.getElementById('refreshIntervalLabel');
-  const probeModeLabel = document.getElementById('probeModeLabel');
-  const probeIntervalLabel = document.getElementById('probeIntervalLabel');
-  if (refreshLabel) refreshLabel.textContent = t('refreshIntervalLabel');
-  if (probeModeLabel) probeModeLabel.textContent = t('probeModeLabel');
-  if (probeIntervalLabel) probeIntervalLabel.textContent = t('probeIntervalLabel');
-  if (autoRefreshNote) {
-    autoRefreshNote.textContent = t('autoRefreshNote', {
-      interval: formatIntervalLabel(settings.runtimeRefreshIntervalMs)
-    });
-  }
-  if (refreshSelect) refreshSelect.value = String(settings.runtimeRefreshIntervalMs);
-  if (probeModeSelect) {
-    probeModeSelect.value = settings.availabilityProbeEnabled ? '1' : '0';
-    const [onOption, offOption] = probeModeSelect.options;
-    if (onOption) onOption.textContent = t('probeModeOn');
-    if (offOption) offOption.textContent = t('probeModeOff');
-  }
-  if (probeIntervalSelect) probeIntervalSelect.value = String(settings.availabilityProbeIntervalMs);
-}
-
-function driftMessage(driftStatus) {
-  if (!driftStatus) return '';
-  if (driftStatus.kind === 'external_logout') return t('driftExternalLogout');
-  if (driftStatus.kind === 'unmanaged_active_session') {
-    const emailSuffix = driftStatus.email ? `（${displayEmailValue(driftStatus.email, { reveal: true })}）` : '';
-    return t('driftUnmanagedActiveSession', { email: emailSuffix });
-  }
-  if (driftStatus.kind === 'external_profile_change') {
-    return t('driftExternalProfileChange', {
-      from: driftStatus.previousLabel || '--',
-      to: driftStatus.currentLabel || '--'
-    });
-  }
-  return '';
-}
-
-function renderDriftBanner(runtime) {
-  const host = document.getElementById('driftBannerHost');
-  if (!host) return;
-  const driftStatus = runtime && runtime.driftStatus;
-  if (!driftStatus) {
-    host.innerHTML = '';
-    return;
-  }
-  host.innerHTML = `
-    <div class="drift-banner drift-banner--${escapeHtml(driftStatus.level || 'warning')}">
-      <strong>${t('driftBannerTitle')}</strong>
-      <p>${escapeHtml(driftMessage(driftStatus))}</p>
-    </div>
-  `;
-}
-
-function applyStaticTranslations() {
-  document.documentElement.lang = currentUiLanguage();
-  document.title = t('documentTitle');
-  const textMap = {
-    appEyebrow: 'appEyebrow',
-    appTitle: 'appTitle',
-    loginEyebrow: 'loginEyebrow',
-    loginTitle: 'loginTitle',
-    loginEmailLabel: 'adminAccountLabel',
-    loginPasswordLabel: 'passwordLabel',
-    loginSubmitBtn: 'loginAction',
-    dashboardTitle: 'dashboardTitle',
-    guideStepSave: 'guideSave',
-    guideStepAuth: 'guideAuth',
-    guideStepSwitch: 'guideSwitch',
-    guideStepLogout: 'guideLogout',
-    activeSectionTitle: 'currentUsageTitle',
-    activeSectionHint: 'currentUsageHint',
-    accountsSectionTitle: 'accountsSectionTitle',
-    accountsSectionHint: 'accountsSectionHint',
-    accountIndexTitle: 'accountIndexTitle',
-    createAccountBtn: 'createAccount',
-    logsSectionTitle: 'logsSectionTitle',
-    logsSectionHint: 'logsSectionHint',
-    switchLogsTitle: 'switchLogsTitle',
-    sampleLogsTitle: 'sampleLogsTitle',
-    clearSwitchLogsBtn: 'clearAction',
-    clearSampleLogsBtn: 'clearAction',
-    switchLogPrevBtn: 'prevPage',
-    switchLogNextBtn: 'nextPage',
-    sampleLogPrevBtn: 'prevPage',
-    sampleLogNextBtn: 'nextPage',
-    logoutBtn: 'logoutBackend'
-  };
-  Object.entries(textMap).forEach(([id, key]) => {
-    const node = document.getElementById(id);
-    if (node) node.textContent = t(key);
-  });
-  const switchPager = document.getElementById('switchLogPageInfo');
-  if (switchPager) switchPager.setAttribute('aria-label', t('switchLogPageAria'));
-  const samplePager = document.getElementById('sampleLogPageInfo');
-  if (samplePager) samplePager.setAttribute('aria-label', t('sampleLogPageAria'));
-  const runtimeTimestamp = document.getElementById('runtimeTimestamp');
-  if (runtimeTimestamp && !state.runtime) runtimeTimestamp.textContent = t('runtimeWaiting');
-  const quotaSourceBadge = document.getElementById('quotaSourceBadge');
-  if (quotaSourceBadge && !state.runtime) quotaSourceBadge.textContent = t('quotaSourceIdle');
-  const switchLogPageText = document.getElementById('switchLogPageText');
-  if (switchLogPageText && !(state.recentSwitches || []).length) switchLogPageText.textContent = t('emptyPageInfo');
-  const sampleLogPageText = document.getElementById('sampleLogPageText');
-  if (sampleLogPageText && !(state.recentSamples || []).length) sampleLogPageText.textContent = t('emptyPageInfo');
-  syncLanguageButton();
-  syncTimeDisplayButton();
-  syncAccountPrivacyButton();
-  renderWorkspaceGuide();
-  renderDashboardSettings();
 }
 
 function renderSummary(runtime) {
   const summary = runtime.summary || {};
-  const source = runtime.quotaSource || {};
+  const nextTargetInfo = runtime.nextAutoSwitchTarget || null;
+  const nextTarget = nextTargetInfo && nextTargetInfo.slot_id
+    ? slotLabelById(nextTargetInfo.slot_id)
+    : nextTargetInfo && nextTargetInfo.state === 'no_candidate'
+      ? '无可用候选'
+      : nextTargetInfo && nextTargetInfo.state === 'no_active_slot'
+        ? '暂无活动账号'
+        : '自动切换已关闭';
+  const nextTargetMeta = nextTargetInfo && nextTargetInfo.slot_id
+    ? `${slotMetaById(nextTargetInfo.slot_id)} · ${displayWorkspaceLabel(nextTargetInfo.workspace_label, '主工作区')}`
+    : nextTargetInfo && nextTargetInfo.state === 'no_candidate'
+      ? '当前没有满足 5 小时和 1 周额度都大于 0 的候选账号'
+      : nextTargetInfo && nextTargetInfo.state === 'no_active_slot'
+        ? '需要先有一个当前活动账号，才能推导下一候选'
+        : '自动切换当前关闭';
+  const nextTargetTone = nextTargetInfo && nextTargetInfo.slot_id
+    ? 'healthy'
+    : nextTargetInfo && nextTargetInfo.state === 'no_candidate'
+      ? 'danger'
+      : 'unknown';
   document.getElementById('summaryGrid').innerHTML = `
     <article class="stat-card">
-      <span class="stat-label">${t('summaryTotalAccounts')}</span>
+      <span class="stat-label">账号总数</span>
       <strong class="stat-value">${summary.totalAccounts || 0}</strong>
     </article>
     <article class="stat-card">
-      <span class="stat-label">${t('summaryAuthenticated')}</span>
+      <span class="stat-label">已认证</span>
       <strong class="stat-value">${summary.authenticatedAccounts || 0}</strong>
     </article>
     <article class="stat-card">
-      <span class="stat-label">${t('summaryExpiringSoon')}</span>
+      <span class="stat-label">即将到期</span>
       <strong class="stat-value">${summary.expiringSoon || 0}</strong>
     </article>
-    <article class="stat-card">
-      <span class="stat-label">${t('summaryBackendRefreshed')}</span>
-      <strong class="stat-value">${source.refreshedCount == null ? '--' : source.refreshedCount}</strong>
+    <article class="stat-card stat-card--${nextTargetTone}">
+      <span class="stat-label">下个切换目标</span>
+      <strong class="stat-value stat-value--compact">${escapeHtml(nextTarget)}</strong>
+      <small class="stat-meta">${escapeHtml(nextTargetMeta)}</small>
     </article>
   `;
 }
 
 function renderRuntimeTimestamp(nowIso) {
-  document.getElementById('runtimeTimestamp').innerHTML = escapeHtml(t('runtimeTimestamp', {
-    time: formatUtcTimestamp(nowIso, { includeSeconds: true })
-  }));
+  const node = document.getElementById('runtimeTimestamp');
+  if (node) node.textContent = '';
+  renderRefreshNote();
 }
 
 function renderActiveSlot(runtime) {
@@ -1530,21 +1292,22 @@ function renderActiveSlot(runtime) {
   const badge = document.getElementById('quotaSourceBadge');
   const active = runtime.activeSlot;
   const source = runtime.quotaSource || {};
-
   badge.textContent = source.state === 'online'
-    ? t('quotaSourceOnline')
+    ? '后端同步正常'
+    : source.state === 'syncing'
+      ? '后台刷新中'
     : source.state === 'degraded'
-      ? t('quotaSourceDegraded')
+      ? '后端部分异常'
       : source.state === 'error'
-        ? t('quotaSourceError')
-        : t('quotaSourceIdle');
+        ? '后端同步失败'
+        : '等待同步';
   badge.className = `inline-badge ${source.state || 'idle'}`;
 
   if (!active) {
     node.innerHTML = `
       <div class="active-empty">
-        <strong>${t('activeEmptyTitle')}</strong>
-        <p class="muted">${t('activeEmptyHint')}</p>
+        <strong>当前没有活动账号</strong>
+        <p class="muted">当服务器上的 code-server 存在有效 Codex 登录态时，这里会自动识别并显示额度</p>
       </div>
     `;
     return;
@@ -1554,31 +1317,31 @@ function renderActiveSlot(runtime) {
     <div class="active-card">
       <div class="active-card__top">
         <div>
-          <div class="active-card__label">${t('activeAccountLabel')}</div>
+          <div class="active-card__label">当前账号</div>
           <h4>${displayAccountName(active)}</h4>
-          <p class="muted">${displayEmailValue(active.email, { fallback: '--' })} · ${stateLabel(active)}</p>
+          <p class="muted">${loginMethodLabel(active.login_method)} · ${displayWorkspaceLabel(active.active_workspace_label || active.primary_workspace_label, '主工作区')}</p>
         </div>
         <div class="status-pill ${stateTone(active.display_state)}">${stateLabel(active)}</div>
       </div>
       <div class="quota-gauge-grid quota-gauge-grid--hero">
-        ${buildQuotaGaugeCard(t('quotaWindow5h'), active.quota_5h_pct, active.quota_5h_reset_label, active.quota_5h_reset_at)}
-        ${buildQuotaGaugeCard(t('quotaWindow1w'), active.quota_week_pct, active.quota_week_reset_label, active.quota_week_reset_at)}
+        ${buildQuotaGaugeCard('5 小时额度', active.quota_5h_pct, active.quota_5h_reset_label, active.quota_5h_reset_at)}
+        ${buildQuotaGaugeCard('1 周额度', active.quota_week_pct, active.quota_week_reset_label, active.quota_week_reset_at)}
       </div>
       <div class="active-card__facts">
         <div class="fact-tile">
-          <span>${t('syncTimeLabel')}</span>
-          <strong>${escapeHtml(formatUtcTimestamp(active.last_seen_at, { includeSeconds: true }))}</strong>
-          <small>${source.message || t('backendRealtimeRead')}</small>
+          <span>同步时间</span>
+          <strong>${escapeHtml(formatTimestamp(active.last_seen_at, { includeSeconds: true }))}</strong>
+          <small>${source.message || '后端实时读取'}</small>
         </div>
         <div class="fact-tile">
-          <span>${t('accountIdLabel')}</span>
+          <span>account_id</span>
           <strong class="mono" title="${active.account_id || '--'}">${shortId(active.account_id)}</strong>
           <small>${freshnessLabel(active.freshness)}</small>
         </div>
         <div class="fact-tile">
-          <span>${t('planTypeLabel')}</span>
-          <strong>${source.planType || '--'}</strong>
-          <small>${source.failedCount ? t('backendSyncFailedCount', { count: source.failedCount }) : t('backendSyncHealthy')}</small>
+          <span>后端计划标识</span>
+          <strong>${displayPlanType(source.planType)}</strong>
+          <small>${describePlanTypeSource(source)}</small>
         </div>
       </div>
     </div>
@@ -1596,24 +1359,43 @@ function renderBootstrapSessions(sessions) {
   node.innerHTML = '';
 }
 
-function latestBootstrapSessionForSlot(slotId) {
+function bootstrapSessionsForSlot(slotId) {
   const sessions = state.runtime && Array.isArray(state.runtime.bootstrapSessions)
     ? state.runtime.bootstrapSessions
     : [];
-  return sessions.find((session) => session.slot_id === slotId) || null;
+  return sessions.filter((session) => session.slot_id === slotId);
+}
+
+function latestBootstrapSessionForSlot(slotId) {
+  return bootstrapSessionsForSlot(slotId)[0] || null;
+}
+
+function latestBootstrapSessionForAuthProfile(slotId, authProfileId) {
+  return bootstrapSessionsForSlot(slotId)
+    .find((session) => String(session.auth_profile_id || '') === String(authProfileId || '')) || null;
+}
+
+function unmatchedBootstrapSessionsForAccount(account) {
+  const profiles = Array.isArray(account.auth_profiles) ? account.auth_profiles : [];
+  const profileIds = new Set(profiles.map((profile) => String(profile.id || '')));
+  return bootstrapSessionsForSlot(account.id).filter((session) => {
+    const authProfileId = String(session.auth_profile_id || '').trim();
+    if (!authProfileId) return true;
+    return !profileIds.has(authProfileId);
+  });
 }
 
 function bootstrapMessageText(account, session) {
   if (!session) return '';
-  if (session.error_text) return maskEmailsInText(session.error_text);
-  if (session.status === 'captured') return t('authCaptured');
-  if (session.status === 'success_pending_capture' || session.status === 'succeeded') return t('authVerifying');
-  if (session.status === 'starting') return t('authGeneratingCode');
-  return account.login_method === 'google' ? t('authOpenHintGoogle') : t('authOpenHintEmail');
+  if (session.error_text) return '这个工作区的认证任务没有完成；你可以重新认证，或取消后重新创建。';
+  if (session.status === 'captured') return '认证完成，资料已写回服务器。';
+  if (session.status === 'success_pending_capture' || session.status === 'succeeded') return 'OpenAI 已授权，正在校验并接管服务器留存。';
+  if (session.status === 'starting') return '正在生成设备码，请稍等。';
+  const loginLabel = loginMethodLabel(account.login_method);
+  return maskEmailsInText(`点击“打开认证页”即可进入 OpenAI 授权页，按 ${loginLabel} 方式完成授权。浏览器环境由你自己决定。`);
 }
 
-function buildInlineAuthProgress(account) {
-  const session = latestBootstrapSessionForSlot(account.id);
+function buildInlineAuthProgress(account, session, options = {}) {
   if (!session) return '';
 
   const deviceCode = session
@@ -1622,13 +1404,16 @@ function buildInlineAuthProgress(account) {
   const authOpenUrl = session.auth_open_url || '';
   const targetEmail = account.email || session.email || '';
   const message = bootstrapMessageText(account, session);
-  const restartLabel = session.status === 'failed' ? t('reauthenticate') : t('regenerateDeviceCode');
+  const restartLabel = session.status === 'failed' ? '重新认证' : '重新生成设备码';
+  const workspaceLabel = displayWorkspaceLabel(options.workspaceLabel || session.workspace_label, '工作区认证');
+  const authProfileId = String(options.authProfileId || session.auth_profile_id || '').trim();
+  const title = String(options.title || `${workspaceLabel} 认证`).trim();
 
   return `
     <section class="account-auth-card">
       <div class="account-auth-card__top">
         <div class="account-auth-card__title">
-          <h5>${t('authTaskTitle')}</h5>
+          <h5>${escapeHtml(title)}</h5>
           <p class="muted">${escapeHtml(message)}</p>
         </div>
         <div class="account-auth-card__actions">
@@ -1637,35 +1422,41 @@ function buildInlineAuthProgress(account) {
       </div>
       ${targetEmail ? `
         <div class="account-auth-code-row">
-          <span class="muted">${t('targetAccountLabel')}</span>
+          <span class="muted">目标账号</span>
           <button type="button" class="device-code-chip inline-copy-target-email" data-target-email="${escapeHtml(targetEmail)}">
             <span class="mono">${escapeHtml(targetEmail)}</span>
-            <span>${t('copyAction')}</span>
+            <span>复制</span>
           </button>
         </div>
       ` : ''}
       <div class="account-auth-code-row">
-        <span class="muted">${t('deviceCodeLabel')}</span>
+        <span class="muted">设备码</span>
         ${deviceCode
           ? `
             <button type="button" class="device-code-chip inline-copy-device-code" data-device-code="${deviceCode}">
               <span class="mono">${deviceCode}</span>
-              <span>${t('copyAction')}</span>
+              <span>复制</span>
             </button>
           `
-          : `<span class="device-code-empty">${t('noDeviceCodeYet')}</span>`}
-        <span class="muted">${t('updatedAt', { time: escapeHtml(formatTimestamp(session.updated_at)) })}</span>
+          : '<span class="device-code-empty">暂未拿到设备码</span>'}
+        <span class="muted">最近更新 ${escapeHtml(formatTimestamp(session.updated_at))}</span>
       </div>
       <div class="account-auth-card__actions">
-        ${authOpenUrl ? `<button type="button" class="secondary inline-open-auth-link" data-auth-open-url="${escapeHtml(authOpenUrl)}">${t('openAuthPage')}</button>` : ''}
-        ${authOpenUrl ? `<button type="button" class="ghost inline-copy-auth-link" data-auth-open-url="${escapeHtml(authOpenUrl)}">${t('copyAuthLink')}</button>` : ''}
-        <button type="button" class="ghost inline-restart-bootstrap" data-slot-id="${account.id}">${restartLabel}</button>
-        <button type="button" class="danger inline-delete-bootstrap-task" data-bootstrap-id="${session.id}">${t('cancelAuth')}</button>
+        ${authOpenUrl ? `<button type="button" class="secondary inline-open-auth-link" data-auth-open-url="${escapeHtml(authOpenUrl)}">打开认证页</button>` : ''}
+        ${authOpenUrl ? `<button type="button" class="ghost inline-copy-auth-link" data-auth-open-url="${escapeHtml(authOpenUrl)}">复制认证链接</button>` : ''}
+        <button
+          type="button"
+          class="ghost inline-restart-bootstrap"
+          data-slot-id="${account.id}"
+          data-auth-profile-id="${escapeHtml(authProfileId)}"
+          data-workspace-label="${escapeHtml(workspaceLabel)}"
+        >${restartLabel}</button>
+        <button type="button" class="danger inline-delete-bootstrap-task" data-bootstrap-id="${session.id}">取消认证</button>
       </div>
-      ${session && session.error_text ? `<div class="account-auth-error">${escapeHtml(maskEmailsInText(session.error_text))}</div>` : ''}
+      ${session && session.error_text ? `<div class="account-auth-error">${escapeHtml(humanizeBackendError(session.error_text))}</div>` : ''}
       ${session.log_tail ? `
         <details class="task-details" data-bootstrap-id="${session.id}" ${state.openBootstrapLogIds.has(session.id) ? 'open' : ''}>
-          <summary>${t('viewLogs')}</summary>
+          <summary>查看日志</summary>
           <pre>${stripAnsi(session.log_tail)}</pre>
         </details>
       ` : ''}
@@ -1680,65 +1471,178 @@ function progressMarkup(label, pct, resetLabel) {
         <span>${label}</span>
         <strong>${quotaValueText(pct)}</strong>
       </div>
-      <div class="quota-line__meta">${pct == null ? t('noQuotaData') : `${quotaRemainingText(pct)} · ${resetLabel} ${t('resetTimeTitle')}`}</div>
+      <div class="quota-line__meta">${pct == null ? '后端还没有返回这项额度' : `${quotaRemainingText(pct)} · ${resetLabel} 重置`}</div>
     </div>
   `;
 }
 
-function buildQuotaPanel(account) {
-  const quotaNote = account.precise
-    ? ''
-    : account.last_error
-      ? humanizeBackendError(account.last_error)
-      : t('quotaMissingRealtime');
+function buildQuotaPanel(source, options = {}) {
+  const precise = source && Object.prototype.hasOwnProperty.call(source, 'precise')
+    ? !!source.precise
+    : source.freshness === 'live';
+  const suppressError = options.suppressError === true;
+  let quotaNote = '';
+  if (!precise) {
+    if (source.last_error) {
+      quotaNote = suppressError ? '' : humanizeBackendError(source.last_error);
+    } else {
+      quotaNote = '后端暂时没有拿到实时额度，因此这里不会继续展示旧的历史值';
+    }
+  }
   return `
     <div class="quota-block__head">
-      <strong>${t('quotaHeading')}</strong>
-      <span class="status-pill ${account.precise ? 'healthy' : 'unknown'}">${account.precise ? t('realtimeQuotaView') : freshnessLabel(account.freshness)}</span>
+      <strong>额度</strong>
+      ${precise ? '' : `<span class="muted">${freshnessLabel(source.freshness)}</span>`}
     </div>
     <div class="quota-gauge-grid quota-gauge-grid--compact">
-      ${buildQuotaGaugeCard(t('quotaWindow5h'), account.quota_5h_pct, account.quota_5h_reset_label, account.quota_5h_reset_at)}
-      ${buildQuotaGaugeCard(t('quotaWindow1w'), account.quota_week_pct, account.quota_week_reset_label, account.quota_week_reset_at)}
+      ${buildQuotaGaugeCard('5 小时额度', source.quota_5h_pct, source.quota_5h_reset_label, source.quota_5h_reset_at)}
+      ${buildQuotaGaugeCard('1 周额度', source.quota_week_pct, source.quota_week_reset_label, source.quota_week_reset_at)}
     </div>
     ${quotaNote ? `<div class="quota-note quota-note--warning">${escapeHtml(quotaNote)}</div>` : ''}
   `;
 }
 
-function buildMetaGrid(account) {
-  const probeMessage = account.last_probe_error || account.last_probe_message || '--';
-  const errorMarkup = account.last_error && account.last_error !== '--'
-    ? `<div class="fact-row fact-row--error"><span>${t('errorLabel')}</span><strong>${escapeHtml(humanizeBackendError(account.last_error))}</strong></div>`
+function authRuntimeStatusLabel(authProfile) {
+  const status = String(authProfile.runtime_status || '').trim();
+  const mapping = {
+    active: '当前使用中',
+    ready: '已认证',
+    pending_auth: '认证中',
+    stale: '等待刷新',
+    exhausted: '额度耗尽',
+    error: '异常',
+    reauth_required: '需要重新认证'
+  };
+  return mapping[status] || '已认证';
+}
+
+function authRuntimeStatusTone(authProfile) {
+  const status = String(authProfile.runtime_status || '').trim();
+  if (status === 'error' || status === 'reauth_required') return 'danger';
+  if (status === 'exhausted' || status === 'pending_auth' || status === 'stale') return 'warning';
+  return 'healthy';
+}
+
+function buildWorkspaceMetaGrid(account, authProfile) {
+  const statusText = authRuntimeStatusLabel(authProfile);
+  const errorMarkup = authProfile.last_error && authProfile.last_error !== '无'
+    ? `<div class="fact-row fact-row--error"><span>错误</span><strong>${escapeHtml(humanizeBackendError(authProfile.last_error))}</strong></div>`
     : '';
   return `
     <div class="fact-row">
-      <span>${t('subscriptionExpiryLabel')}</span>
-      <strong>${buildSubscriptionLabel(account)}</strong>
+      <span>当前状态</span>
+      <strong>${escapeHtml(statusText)}</strong>
     </div>
     <div class="fact-row">
-      <span>${t('lastSyncLabel')}</span>
-      <strong>${escapeHtml(formatUtcTimestamp(account.last_seen_at, { includeSeconds: true }))}</strong>
+      <span>最后同步</span>
+      <strong>${escapeHtml(formatTimestamp(authProfile.last_seen_at, { includeSeconds: true }))}</strong>
     </div>
     <div class="fact-row">
-      <span>${t('lastAuthLabel')}</span>
-      <strong>${escapeHtml(formatUtcTimestamp(account.last_bootstrap_at, { includeSeconds: true }))}</strong>
-    </div>
-    <div class="fact-row">
-      <span>${t('accountIdLabel')}</span>
-      <strong class="mono" title="${account.account_id || '--'}">${shortId(account.account_id)}</strong>
-    </div>
-    <div class="fact-row">
-      <span>${t('probeStatusLabel')}</span>
-      <strong class="status-text ${probeStatusTone(account.last_probe_status)}">${probeStatusText(account.last_probe_status)}</strong>
-    </div>
-    <div class="fact-row">
-      <span>${t('probeLastCheckedLabel')}</span>
-      <strong>${escapeHtml(formatUtcTimestamp(account.last_probe_at, { includeSeconds: true }))}</strong>
-    </div>
-    <div class="fact-row">
-      <span>${t('probeMessageLabel')}</span>
-      <strong title="${escapeHtml(maskEmailsInText(probeMessage))}">${escapeHtml(truncateText(maskEmailsInText(probeMessage), 72))}</strong>
+      <span>account_id</span>
+      <strong class="mono" title="${authProfile.account_id || authProfile.identity_key || '--'}">${shortId(authProfile.account_id || authProfile.identity_key)}</strong>
     </div>
     ${errorMarkup}
+  `;
+}
+
+function buildWorkspacePanel(account, authProfile) {
+  const session = latestBootstrapSessionForAuthProfile(account.id, authProfile.id);
+  const workspaceLabel = displayWorkspaceLabel(authProfile.workspace_label, '未命名工作区');
+  const busy = !!(session && isActiveBootstrapStatus(session.status));
+  return `
+    <section class="workspace-panel ${authProfile.is_active ? 'workspace-panel--active' : ''}" data-auth-profile-id="${authProfile.id}">
+      <div class="workspace-panel__header">
+        <div class="workspace-panel__title">
+          <h5>${escapeHtml(workspaceLabel)}</h5>
+          <p class="muted">${loginMethodLabel(account.login_method)} · ${freshnessLabel(authProfile.freshness)}</p>
+        </div>
+        <div class="workspace-panel__badges">
+          ${authProfile.is_primary ? '<span class="status-pill healthy">主工作区</span>' : ''}
+          ${authProfile.is_active ? '<span class="status-pill healthy">当前使用中</span>' : ''}
+          ${authProfile.availability === 'error' ? '<span class="status-pill danger">异常</span>' : ''}
+        </div>
+      </div>
+      ${session ? buildInlineAuthProgress(account, session, {
+        title: `${workspaceLabel} 认证`,
+        workspaceLabel,
+        authProfileId: authProfile.id
+      }) : ''}
+      <div class="workspace-panel__actions">
+        <button type="button" class="ghost auth-profile-set-primary" data-auth-profile-id="${authProfile.id}" ${authProfile.is_primary || busy ? 'disabled' : ''}>设为主工作区</button>
+        <button type="button" class="ghost auth-profile-rename" data-auth-profile-id="${authProfile.id}" ${busy ? 'disabled' : ''}>修改名称</button>
+        ${busy ? '' : `<button type="button" class="secondary auth-profile-reauth" data-auth-profile-id="${authProfile.id}">重新认证</button>`}
+        <button type="button" class="primary auth-profile-switch" data-auth-profile-id="${authProfile.id}" ${(authProfile.is_active || busy) ? 'disabled' : ''}>切换</button>
+        <button type="button" class="danger auth-profile-delete" data-auth-profile-id="${authProfile.id}" ${busy ? 'disabled' : ''}>删除工作区</button>
+      </div>
+      <div class="workspace-panel__body">
+        <section class="quota-panel">
+          ${buildQuotaPanel(authProfile, { suppressError: !!authProfile.last_error })}
+        </section>
+        <div class="meta-grid workspace-meta-grid">
+          ${buildWorkspaceMetaGrid(account, authProfile)}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function buildPendingWorkspacePanel(account, session) {
+  const workspaceLabel = displayWorkspaceLabel(session.workspace_label, '待完成工作区');
+  return `
+    <section class="workspace-panel workspace-panel--pending" data-bootstrap-id="${session.id}">
+      <div class="workspace-panel__header">
+        <div class="workspace-panel__title">
+          <h5>${escapeHtml(workspaceLabel)}</h5>
+          <p class="muted">这个工作区正在等待完成认证，完成后会自动变成正式工作区面板</p>
+        </div>
+        <div class="workspace-panel__badges">
+          <span class="status-pill warning">${escapeHtml(bootstrapStatusText(session.status))}</span>
+        </div>
+      </div>
+      ${buildInlineAuthProgress(account, session, {
+        title: `${workspaceLabel} 认证`,
+        workspaceLabel
+      })}
+      <div class="workspace-panel__body workspace-panel__body--single">
+        <section class="quota-panel">
+          <div class="quota-block__head">
+            <strong>额度</strong>
+            <span class="status-pill unknown">等待认证完成</span>
+          </div>
+          <div class="quota-note quota-note--warning">完成认证后，这个工作区会在这里显示自己的独立额度、认证状态和切换能力。</div>
+        </section>
+      </div>
+    </section>
+  `;
+}
+
+function buildWorkspacePanels(account) {
+  const profiles = Array.isArray(account.auth_profiles) ? account.auth_profiles : [];
+  const profileCards = profiles.map((authProfile) => buildWorkspacePanel(account, authProfile)).join('');
+  const pendingCards = unmatchedBootstrapSessionsForAccount(account)
+    .map((session) => buildPendingWorkspacePanel(account, session))
+    .join('');
+  return profileCards || pendingCards
+    ? `${profileCards}${pendingCards}`
+    : '<div class="empty-card"><strong>还没有工作区</strong><p class="muted">先保存资料，再在下方创建第一个工作区。</p></div>';
+}
+
+function buildAuthProfileCreatePanel(account) {
+  const profiles = Array.isArray(account.auth_profiles) ? account.auth_profiles : [];
+  const hasProfiles = profiles.length > 0;
+  return `
+    <section class="auth-profile-create-panel">
+      <div class="auth-profile-create-panel__head">
+        <h5>${hasProfiles ? '新增工作区' : '创建首个工作区'}</h5>
+      </div>
+      <div class="auth-profile-create">
+        <label>
+          <span>新增工作区名称</span>
+          <input type="text" class="workspace-label-input" data-field="workspace_label" placeholder="例如：主工作区 / 客户 A / 研究环境" />
+        </label>
+        <button type="button" class="secondary create-auth-profile">${hasProfiles ? '添加工作区' : '创建首个工作区'}</button>
+      </div>
+    </section>
   `;
 }
 
@@ -1755,22 +1659,71 @@ function buildStageStrip(account) {
   }).valid;
 
   return `
-    ${stageChip(savedReady ? 'done' : 'pending', savedReady ? t('stageSavedDone') : t('stageSavedPending'))}
-    ${stageChip(account.has_pending_bootstrap ? 'active' : account.has_profile ? 'done' : 'pending', account.has_pending_bootstrap ? t('stageAuthActive') : account.has_profile ? t('stageAuthDone') : t('stageAuthPending'))}
-    ${stageChip(account.is_active ? 'active' : 'idle', account.is_active ? t('stageCurrentActive') : t('stageCurrentIdle'))}
+    ${stageChip(savedReady ? 'healthy' : 'warning', savedReady ? '资料已保存' : '先保存资料')}
+    ${stageChip(account.has_pending_bootstrap ? 'warning' : account.has_profile ? 'healthy' : 'warning', account.has_pending_bootstrap ? '认证进行中' : account.has_profile ? '已完成认证' : '待认证')}
+    ${stageChip(account.is_active ? 'healthy' : 'warning', account.is_active ? '当前正在使用' : '未切换')}
+    ${stageChip(account.subscription_status === 'expired' ? 'danger' : account.subscription_status === 'warning' ? 'warning' : 'healthy', account.subscription_label || '未设置到期日')}
   `;
 }
 
 function sortAccounts(accounts) {
   const severity = { expired: 0, warning: 1, healthy: 2, unknown: 3 };
+  const quotaRemaining = (account, key) => {
+    const pct = Number(account[key]);
+    if (!Number.isFinite(pct)) return -1;
+    return Math.max(0, 100 - pct);
+  };
   return [...accounts].sort((a, b) => {
+    if (state.accountSort === 'quota_5h') return quotaRemaining(b, 'quota_5h_pct') - quotaRemaining(a, 'quota_5h_pct');
+    if (state.accountSort === 'quota_7d') return quotaRemaining(b, 'quota_week_pct') - quotaRemaining(a, 'quota_week_pct');
+    if (state.accountSort === 'name_asc') return String(displayAccountName(a) || a.id).localeCompare(String(displayAccountName(b) || b.id), 'zh-CN');
+    if (state.accountSort === 'name_desc') return String(displayAccountName(b) || b.id).localeCompare(String(displayAccountName(a) || a.id), 'zh-CN');
+    if (state.accountSort === 'expiry') {
+      return String(a.expires_at || '9999-12-31').localeCompare(String(b.expires_at || '9999-12-31'));
+    }
     if (!!a.is_active !== !!b.is_active) return a.is_active ? -1 : 1;
     if (!!a.has_profile !== !!b.has_profile) return a.has_profile ? -1 : 1;
     const sa = severity[a.subscription_status] ?? 9;
     const sb = severity[b.subscription_status] ?? 9;
     if (sa !== sb) return sa - sb;
-    return String(displayAccountName(a) || a.id).localeCompare(String(displayAccountName(b) || b.id), currentUiLanguage() === 'en' ? 'en' : 'zh-CN');
+    return String(displayAccountName(a) || a.id).localeCompare(String(displayAccountName(b) || b.id), 'zh-CN');
   });
+}
+
+function filterAccounts(accounts) {
+  const search = String(state.accountSearch || '').trim().toLowerCase();
+  return accounts.filter((account) => {
+    if (state.accountFilter === 'available' && (!account.has_profile || account.display_state === 'error' || account.display_state === 'auth_required')) return false;
+    if (state.accountFilter === 'pending' && !account.has_pending_bootstrap) return false;
+    if (state.accountFilter === 'unauth' && (account.has_profile || account.display_state !== 'auth_required')) return false;
+    if (state.accountFilter === 'error' && account.display_state !== 'error') return false;
+    if (state.accountFilter === 'active' && !account.is_active) return false;
+    if (state.accountLoginMethodFilter !== 'all' && String(account.login_method || '') !== state.accountLoginMethodFilter) return false;
+    if (!search) return true;
+    const haystacks = [
+      account.email || '',
+      account.label || '',
+      loginMethodLabel(account.login_method),
+      account.account_id || '',
+      account.identity_key || '',
+      ...(Array.isArray(account.auth_profiles) ? account.auth_profiles.flatMap((authProfile) => [
+        authProfile.workspace_label || '',
+        authProfile.account_id || '',
+        authProfile.identity_key || ''
+      ]) : [])
+    ].join('\n').toLowerCase();
+    return haystacks.includes(search);
+  });
+}
+
+function buildAccountsView(accounts) {
+  const visibleAccounts = sortAccounts(filterAccounts(accounts));
+  const selectedId = ensureSelectedAccountId(visibleAccounts);
+  return {
+    visibleAccounts,
+    selectedId,
+    selectedAccount: visibleAccounts.find((account) => account.id === selectedId) || visibleAccounts[0] || null
+  };
 }
 
 function isClientAccountDraft(slot) {
@@ -1804,14 +1757,13 @@ function syncClientPendingBootstrapFlags() {
 
 function renderRuntimeState(options = {}) {
   if (!state.runtime) return;
-  renderDashboardSettings();
-  renderDriftBanner(state.runtime);
+  const accountsView = buildAccountsView(state.runtime.slots || []);
   renderRuntimeTimestamp(state.runtime.now || new Date().toISOString());
   renderSummary(state.runtime);
   renderActiveSlot(state.runtime);
   renderBootstrapSessions(state.runtime.bootstrapSessions || []);
-  renderAccountsSummary(state.runtime);
-  renderAccounts(state.runtime.slots || []);
+  renderAccountsSummary(state.runtime, accountsView);
+  renderAccounts(state.runtime.slots || [], accountsView);
   if (options.includeLogs !== false) {
     renderSwitchLogs(state.recentSwitches || []);
     renderSampleLogs(state.recentSamples || []);
@@ -1834,7 +1786,15 @@ function optimisticBootstrapStart(result) {
   };
   mutateRuntime((runtime) => {
     const sessions = Array.isArray(runtime.bootstrapSessions) ? runtime.bootstrapSessions : [];
-    runtime.bootstrapSessions = [session, ...sessions.filter((item) => item.id !== session.id && item.slot_id !== session.slot_id)];
+    runtime.bootstrapSessions = [
+      session,
+      ...sessions.filter((item) => {
+        if (item.id === session.id) return false;
+        if (item.slot_id !== session.slot_id) return true;
+        if (String(item.auth_profile_id || '') !== String(session.auth_profile_id || '')) return true;
+        return String(item.workspace_label || '') !== String(session.workspace_label || '');
+      })
+    ];
     const slot = (runtime.slots || []).find((item) => item.id === session.slot_id);
     if (slot) {
       slot.last_error = null;
@@ -1891,11 +1851,11 @@ function isCardDirty(card) {
 
 function validateAccountFields(snapshot) {
   const errors = [];
-  if (!snapshot.email) errors.push(t('fillEmailFirst'));
-  else if (!EMAIL_PATTERN.test(snapshot.email)) errors.push(t('invalidEmail'));
-  if (!snapshot.login_method || !['email', 'google'].includes(snapshot.login_method)) errors.push(t('selectLoginMethod'));
-  if (!snapshot.expires_at) errors.push(t('setExpiryDate'));
-  else if (!DATE_PATTERN.test(snapshot.expires_at)) errors.push(t('invalidExpiryDate'));
+  if (!snapshot.email) errors.push('请先填写邮箱');
+  else if (!EMAIL_PATTERN.test(snapshot.email)) errors.push('邮箱格式不正确');
+  if (!snapshot.login_method || !['email', 'google', 'apple', 'microsoft', 'phone'].includes(snapshot.login_method)) errors.push('请选择登录方式');
+  if (!snapshot.expires_at) errors.push('请设置订阅到期日');
+  else if (!DATE_PATTERN.test(snapshot.expires_at)) errors.push('订阅到期日格式不正确');
   return {
     valid: errors.length === 0,
     errors
@@ -1912,7 +1872,7 @@ function syncFieldValidity(card, showInvalid) {
     const name = field.dataset.field;
     let invalid = false;
     if (name === 'email') invalid = !snapshot.email || !EMAIL_PATTERN.test(snapshot.email);
-    if (name === 'login_method') invalid = !snapshot.login_method || !['email', 'google'].includes(snapshot.login_method);
+    if (name === 'login_method') invalid = !snapshot.login_method || !['email', 'google', 'apple', 'microsoft', 'phone'].includes(snapshot.login_method);
     if (name === 'expires_at') invalid = !snapshot.expires_at || !DATE_PATTERN.test(snapshot.expires_at);
     const visibleInvalid = showInvalid && invalid;
     field.classList.toggle('field-invalid', visibleInvalid);
@@ -1932,19 +1892,15 @@ function flowHintText(card) {
   const currentPendingBootstrap = activeBootstrapSession();
   const blockedByOtherBootstrap = currentPendingBootstrap && currentPendingBootstrap.slot_id !== card.dataset.accountId;
 
-  if (dirty && !draftValidation.valid) return `${draftValidation.errors[0]}`;
-  if (dirty) return t('saveAccountFirst');
-  if (!savedReady) return t('hintFillAndSave');
-  if (hasPendingBootstrap) return t('hintAuthInProgress');
-  if (blockedByOtherBootstrap) {
-    return t('hintAuthBlocked', {
-      email: displayEmailValue(currentPendingBootstrap.email, { fallback: '--' })
-    });
-  }
-  if (cooldown) return t('hintDeviceCooldown', { time: formatTimestamp(cooldown.expires_at) });
-  if (!hasProfile) return t('hintNextAuth');
-  if (isActive) return t('hintActiveReauth');
-  return t('hintReady');
+  if (dirty && !draftValidation.valid) return `${draftValidation.errors[0]}，补全后再保存`;
+  if (dirty) return '资料已修改，下一步先保存';
+  if (!savedReady) return '先把资料填完整并保存';
+  if (hasPendingBootstrap) return '当前有工作区认证进行中，请先完成或删除当前任务';
+  if (blockedByOtherBootstrap) return `当前正在认证 ${displayEmailValue(currentPendingBootstrap.email, { fallback: '另一个账号' })}，请先完成或删除该任务`;
+  if (cooldown) return `设备码请求过于频繁，请等待到 ${formatTimestamp(cooldown.expires_at)} 后再试`;
+  if (!hasProfile) return '资料已保存';
+  if (isActive) return '资料已保存';
+  return '资料已保存';
 }
 
 function updateAccountCardState(card) {
@@ -1960,35 +1916,23 @@ function updateAccountCardState(card) {
   const blockedByOtherBootstrap = currentPendingBootstrap && currentPendingBootstrap.slot_id !== card.dataset.accountId;
 
   const saveButton = card.querySelector('.save-account');
-  const authButton = card.querySelector('.bootstrap-account');
-  const testButton = card.querySelector('.test-account');
-  const switchButton = card.querySelector('.switch-account');
   const logoutButton = card.querySelector('.logout-account');
   const deleteButton = card.querySelector('.delete-account');
+  const createWorkspaceButton = card.querySelector('.create-auth-profile');
   const flowNode = card.querySelector('.flow-hint');
 
   const canSave = dirty && draftValidation.valid;
-  const canAuth = !dirty && savedReady && !hasPendingBootstrap && !blockedByOtherBootstrap && !cooldown;
-  const canTest = !dirty && savedReady && hasProfile && !hasPendingBootstrap;
-  const canSwitch = !dirty && savedReady && hasProfile && !isActive;
+  const canCreateWorkspace = !dirty && savedReady && !hasPendingBootstrap && !blockedByOtherBootstrap && !cooldown;
   const canLogout = !dirty && savedReady && hasProfile;
   const canDelete = !dirty && !isActive;
 
   saveButton.disabled = !canSave;
-  authButton.disabled = !canAuth;
-  testButton.disabled = !canTest;
-  switchButton.disabled = !canSwitch;
   logoutButton.disabled = !canLogout;
   deleteButton.disabled = !canDelete;
-  authButton.textContent = hasProfile ? t('reauthenticate') : t('guideAuth');
+  if (createWorkspaceButton) createWorkspaceButton.disabled = !canCreateWorkspace;
   flowNode.textContent = flowHintText(card);
 
   syncFieldValidity(card, dirty);
-
-  switchButton.classList.toggle('primary', canSwitch);
-  switchButton.classList.toggle('ghost', !canSwitch);
-  authButton.classList.toggle('secondary', canAuth);
-  authButton.classList.toggle('ghost', !canAuth);
 }
 
 function ensureSelectedAccountId(accounts) {
@@ -1999,42 +1943,42 @@ function ensureSelectedAccountId(accounts) {
   return state.selectedAccountId;
 }
 
-function renderAccountIndex(accounts) {
+function renderAccountIndex(accounts, view = buildAccountsView(accounts)) {
   const host = document.getElementById('accountIndexList');
+  const visibleAccounts = view.visibleAccounts;
   if (!accounts.length) {
     host.innerHTML = `
       <div class="empty-card">
-        <strong>${t('emptyNoAccountsTitle')}</strong>
-        <p class="muted">${t('emptyNoAccountsHint')}</p>
+        <strong>还没有账号</strong>
+        <p class="muted">点击“新建账号”开始录入邮箱、登录方式和到期日</p>
+      </div>
+    `;
+    return;
+  }
+  if (!visibleAccounts.length) {
+    host.innerHTML = `
+      <div class="empty-card">
+        <strong>没有匹配结果</strong>
+        <p class="muted">试试调整搜索词、排序或过滤条件</p>
       </div>
     `;
     return;
   }
 
-  const selectedId = ensureSelectedAccountId(accounts);
-  host.innerHTML = sortAccounts(accounts).map((account) => `
+  const selectedId = view.selectedId;
+  host.innerHTML = visibleAccounts.map((account) => `
     <button type="button" class="account-index-item ${account.id === selectedId ? 'selected' : ''}" data-account-id="${account.id}">
       <div class="account-index-item__top">
         <strong>${displayAccountName(account)}</strong>
         <span class="status-pill ${stateTone(account.display_state)}">${stateLabel(account)}</span>
       </div>
-      <div class="account-index-item__signals">
-        ${buildQuotaSignal(t('quotaWindow5hShort'), account.quota_5h_pct)}
-        ${buildQuotaSignal(t('quotaWindow1wShort'), account.quota_week_pct)}
-      </div>
+      ${buildAccountIndexSignals(account)}
       <div class="account-index-item__meta">
-        <span>${account.login_method === 'google' ? t('googleLogin') : t('emailLogin')}</span>
-        <span class="status-pill ${subscriptionTone(account.subscription_status)}">${buildSubscriptionLabel(account)}</span>
+        <span>${loginMethodLabel(account.login_method)} · ${account.auth_profile_count || 0} 个认证</span>
+        <span class="status-pill ${subscriptionTone(account.subscription_status)}">${account.subscription_label || '未设置到期日'}</span>
       </div>
     </button>
   `).join('');
-
-  host.querySelectorAll('.account-index-item').forEach((button) => {
-    button.onclick = () => {
-      state.selectedAccountId = button.dataset.accountId || null;
-      renderAccounts(state.runtime ? state.runtime.slots || [] : []);
-    };
-  });
 }
 
 function renderAccountDetail(account) {
@@ -2045,8 +1989,8 @@ function renderAccountDetail(account) {
   if (!account) {
     host.innerHTML = `
       <div class="empty-card">
-        <strong>${t('emptySelectAccountTitle')}</strong>
-        <p class="muted">${t('emptySelectAccountHint')}</p>
+        <strong>请选择一个账号</strong>
+        <p class="muted">左侧点选账号后，这里会显示资料、额度和操作按钮</p>
       </div>
     `;
     return;
@@ -2066,49 +2010,40 @@ function renderAccountDetail(account) {
   root.dataset.state = account.display_state || '';
 
   fragment.querySelector('.account-title').textContent = displayAccountName(account);
-  fragment.querySelector('.account-subtitle').textContent = `${account.login_method === 'google' ? t('googleLogin') : t('emailLogin')} · ${freshnessLabel(account.freshness)}`;
+  fragment.querySelector('.account-subtitle').textContent = `${loginMethodLabel(account.login_method)} · ${freshnessLabel(account.freshness)}`;
   fragment.querySelector('.account-badge').textContent = stateLabel(account);
   fragment.querySelector('.account-badge').classList.add(stateTone(account.display_state));
-  fragment.querySelector('.account-subscription').textContent = buildSubscriptionLabel(account);
-  fragment.querySelector('.account-subscription').classList.add(subscriptionTone(account.subscription_status));
+  fragment.querySelector('.delete-account').textContent = '删除账号';
   fragment.querySelector('.account-stage-strip').innerHTML = buildStageStrip(account);
   fragment.querySelector('.subscription-dot').classList.add(subscriptionTone(account.subscription_status));
   fragment.querySelector('.detail-email-title').textContent = displayAccountName(account);
   fragment.querySelector('.detail-state-text').textContent = stateLabel(account);
-  fragment.querySelector('.detail-summary-email-label').textContent = t('displayEmailLabel');
-  fragment.querySelector('.detail-summary-state-label').textContent = t('currentStateLabel');
-  fragment.querySelector('.field-label-email').textContent = t('emailLabel');
-  fragment.querySelector('.field-label-login-method').textContent = t('loginMethodFieldLabel');
-  fragment.querySelector('.field-label-expires-at').textContent = t('subscriptionExpiryFieldLabel');
-  fragment.querySelector('.save-account').textContent = t('saveAction');
-  fragment.querySelector('.test-account').textContent = t('probeAction');
-  fragment.querySelector('.switch-account').textContent = t('switchAction');
-  fragment.querySelector('.logout-account').textContent = currentUiLanguage() === 'en' ? 'Log Out' : '退出';
-  fragment.querySelector('.delete-account').textContent = t('deleteAction');
   const emailField = fragment.querySelector('[data-field="email"]');
   emailField.value = account.email || '';
   emailField.type = isAccountPrivacyEnabled() ? 'password' : 'email';
-  emailField.placeholder = isAccountPrivacyEnabled() ? t('accountPrivacyPlaceholder') : '';
+  emailField.placeholder = isAccountPrivacyEnabled() ? '账号隐私已开启' : '';
   fragment.querySelector('[data-field="login_method"]').value = account.login_method || 'email';
-  fragment.querySelector('[data-field="login_method"] option[value="email"]').textContent = currentUiLanguage() === 'en' ? 'Email' : t('emailLabel');
   fragment.querySelector('[data-field="expires_at"]').value = account.expires_at || '';
-  fragment.querySelector('.account-auth-progress').innerHTML = buildInlineAuthProgress(account);
-  fragment.querySelector('.quota-panel').innerHTML = buildQuotaPanel(account);
-  fragment.querySelector('.meta-grid').innerHTML = buildMetaGrid(account);
+  fragment.querySelector('.workspace-panels-host').innerHTML = buildWorkspacePanels(account);
+  fragment.querySelector('.auth-profile-create-host').innerHTML = buildAuthProfileCreatePanel(account);
 
   host.appendChild(fragment);
   updateAccountCardState(host.querySelector('.account-card'));
 }
 
-function renderAccounts(accounts) {
-  renderAccountIndex(accounts);
-  if (!accounts.length) {
+function renderAccountIndexSelection(selectedId) {
+  document.querySelectorAll('#accountIndexList .account-index-item').forEach((button) => {
+    button.classList.toggle('selected', button.dataset.accountId === selectedId);
+  });
+}
+
+function renderAccounts(accounts, view = buildAccountsView(accounts)) {
+  renderAccountIndex(accounts, view);
+  if (!view.visibleAccounts.length) {
     renderAccountDetail(null);
     return;
   }
-  const selectedId = ensureSelectedAccountId(accounts);
-  const selectedAccount = accounts.find((account) => account.id === selectedId) || sortAccounts(accounts)[0];
-  renderAccountDetail(selectedAccount || null);
+  renderAccountDetail(view.selectedAccount || null);
   bindDynamicHandlers();
 }
 
@@ -2117,7 +2052,7 @@ function renderSwitchLogs(items) {
   if (!items.length) {
     state.switchLogPage = 1;
     updateLogPager('switch', 0, 1, 1);
-    node.innerHTML = `<div class="empty-card"><strong>${t('emptySwitchLogsTitle')}</strong><p class="muted">${t('emptySwitchLogsHint')}</p></div>`;
+    node.innerHTML = '<div class="empty-card"><strong>暂无切换记录</strong><p class="muted">点击账号卡片中的“切换”后，这里会留下记录</p></div>';
     return;
   }
   const paged = paginateLogs(items, state.switchLogPage);
@@ -2132,13 +2067,10 @@ function renderSwitchLogs(items) {
         </div>
         <span class="status-pill ${switchStatusTone(item.status)}">${switchStatusLabel(item.status)}</span>
       </div>
-      <div class="log-item__summary">${t('switchFromTo', {
-        from: `<strong>${escapeHtml(slotLabelById(item.from_slot_id))}</strong>`,
-        to: `<strong>${escapeHtml(slotLabelById(item.to_slot_id))}</strong>`
-      })}</div>
+      <div class="log-item__summary">从 <strong>${escapeHtml(slotLabelById(item.from_slot_id))}</strong> 切到 <strong>${escapeHtml(slotLabelById(item.to_slot_id))}</strong></div>
       <div class="log-item__chips">
-        <span class="log-chip">${escapeHtml(slotMetaById(item.from_slot_id) || t('sourceUnknown'))}</span>
-        <span class="log-chip">${escapeHtml(slotMetaById(item.to_slot_id) || t('targetUnknown'))}</span>
+        <span class="log-chip">${escapeHtml(slotMetaById(item.from_slot_id) || '来源未知')}</span>
+        <span class="log-chip">${escapeHtml(slotMetaById(item.to_slot_id) || '目标未知')}</span>
       </div>
       ${item.detail && item.detail.error ? `<div class="log-item__note">${escapeHtml(maskEmailsInText(item.detail.error))}</div>` : ''}
     </article>
@@ -2150,7 +2082,7 @@ function renderSampleLogs(items) {
   if (!items.length) {
     state.sampleLogPage = 1;
     updateLogPager('sample', 0, 1, 1);
-    node.innerHTML = `<div class="empty-card"><strong>${t('emptySampleLogsTitle')}</strong><p class="muted">${t('emptySampleLogsHint')}</p></div>`;
+    node.innerHTML = '<div class="empty-card"><strong>暂无额度快照</strong><p class="muted">页面加载后会立即刷新一次已认证账号的额度</p></div>';
     return;
   }
   const paged = paginateLogs(items, state.sampleLogPage);
@@ -2167,28 +2099,28 @@ function renderSampleLogs(items) {
       </div>
       <div class="log-item__summary">
         ${item.parser_status === 'ok'
-          ? escapeHtmlMultiline(`${quotaLineDescription(t('quotaWindow5h'), item.quota_5h_pct, item.quota_5h_reset_label, item.quota_5h_reset_at)}\n${quotaLineDescription(t('quotaWindow1w'), item.quota_week_pct, item.quota_week_reset_label, item.quota_week_reset_at)}`)
+          ? escapeHtmlMultiline(`${quotaLineDescription('5 小时', item.quota_5h_pct, item.quota_5h_reset_label, item.quota_5h_reset_at)}\n${quotaLineDescription('1 周', item.quota_week_pct, item.quota_week_reset_label, item.quota_week_reset_at)}`)
           : escapeHtmlMultiline(humanizeBackendError(item.raw_text))}
       </div>
       <div class="log-item__chips">
-        <span class="log-chip">${escapeHtml(parseJsonSafe(item.raw_text)?.plan_type || t('planUnknown'))}</span>
-        <span class="log-chip">${escapeHtml(item.slot_id || t('untrackedAccount'))}</span>
+        <span class="log-chip">${escapeHtml(parseJsonSafe(item.raw_text)?.plan_type || '计划未知')}</span>
+        <span class="log-chip">${escapeHtml(item.slot_id || '未归档账号')}</span>
       </div>
     </article>
   `).join('');
 }
 
-function renderAccountsSummary(runtime) {
+function renderAccountsSummary(runtime, view = buildAccountsView(runtime.slots || [])) {
   const summary = runtime.summary || {};
-  document.getElementById('accountsSummaryText').textContent = t('accountsSummary', {
-    authenticated: summary.authenticatedAccounts || 0,
-    total: summary.totalAccounts || 0,
-    expiring: summary.expiringSoon || 0,
-    expired: summary.expiredAccounts || 0
-  });
+  const visibleCount = view.visibleAccounts.length;
+  document.getElementById('accountsSummaryText').textContent = `显示 ${visibleCount} / 全部 ${summary.totalAccounts || 0} · 已认证 ${summary.authenticatedAccounts || 0} · 即将到期 ${summary.expiringSoon || 0} · 已到期 ${summary.expiredAccounts || 0}`;
 }
 
 async function loadRuntime(options = {}) {
+  if (options.includeLogs !== false && state.deferredLogsLoadTimer) {
+    window.clearTimeout(state.deferredLogsLoadTimer);
+    state.deferredLogsLoadTimer = null;
+  }
   if (state.loadingRuntime) {
     state.queuedRuntimeReload = true;
     state.queuedRuntimeReloadOptions = mergeLoadOptions(state.queuedRuntimeReloadOptions, options);
@@ -2198,7 +2130,6 @@ async function loadRuntime(options = {}) {
   state.loadingRuntime = true;
   try {
     const query = new URLSearchParams();
-    if (options.fast === true) query.set('fast', '1');
     if (options.includeLogs === false) query.set('includeLogs', '0');
     const path = query.size ? `/api/runtime?${query.toString()}` : '/api/runtime';
     const json = await api(path, { method: 'GET' });
@@ -2208,7 +2139,9 @@ async function loadRuntime(options = {}) {
     if (Array.isArray(json.recentSamples)) state.recentSamples = json.recentSamples;
 
     syncClientPendingBootstrapFlags();
+    updateSettingsFromRuntime(json.runtime);
     renderRuntimeState({ includeLogs: options.includeLogs !== false });
+    presentRuntimeAlerts(json.runtime);
   } finally {
     state.loadingRuntime = false;
     if (state.queuedRuntimeReload) {
@@ -2218,20 +2151,6 @@ async function loadRuntime(options = {}) {
       loadRuntime(nextOptions).catch(console.error);
     }
   }
-}
-
-async function saveRuntimeSettings(patch) {
-  const json = await api('/api/settings', {
-    method: 'PATCH',
-    body: JSON.stringify(patch)
-  });
-  if (state.runtime) {
-    state.runtime.settings = json.settings;
-  }
-  renderDashboardSettings();
-  startRuntimeRefreshLoop();
-  showToast(t('settingsSaved'), 'success');
-  scheduleRuntimeReload(10, { fast: true, includeLogs: false });
 }
 
 function bindDynamicHandlers() {
@@ -2246,69 +2165,26 @@ function bindDynamicHandlers() {
       const accountId = card.dataset.accountId;
       const payload = readCardFieldSnapshot(card);
       await runButtonAction(button, {
-        pendingText: currentUiLanguage() === 'en' ? 'Saving...' : '保存中...',
-        successText: t('accountSaved')
+        pendingText: '保存中...',
+        successText: '账号资料已保存'
       }, async () => {
-        await api(`/api/accounts/${accountId}`, {
+        const result = await api(`/api/accounts/${accountId}`, {
           method: 'PATCH',
           body: JSON.stringify(payload)
         });
-        scheduleRuntimeReload(10, { fast: true, includeLogs: false });
+        mutateRuntime((runtime) => {
+          runtime.slots = (runtime.slots || []).map((slot) => slot.id === accountId ? { ...slot, ...result.account } : slot);
+        }, { includeLogs: false });
+        scheduleRuntimeReload(10, { includeLogs: false });
         scheduleRuntimeReload(220);
       }).catch(() => {});
     };
   });
 
-  document.querySelectorAll('.bootstrap-account').forEach((button) => {
+  document.querySelectorAll('.create-auth-profile').forEach((button) => {
     button.onclick = async () => {
       const card = button.closest('.account-card');
-      const accountId = card.dataset.accountId;
-      const restart = card.dataset.hasProfile === '1';
-      await runButtonAction(button, {
-        pendingText: restart ? (currentUiLanguage() === 'en' ? 'Refreshing auth...' : '重置认证中...') : (currentUiLanguage() === 'en' ? 'Creating task...' : '创建任务中...'),
-        successText: restart ? t('restartedBootstrap') : t('createdBootstrap'),
-        refreshOnError: true
-      }, async () => {
-        const result = await startBootstrapTask(accountId, { restart });
-        optimisticBootstrapStart(result);
-      }).catch(() => {});
-    };
-  });
-
-  document.querySelectorAll('.test-account').forEach((button) => {
-    button.onclick = async () => {
-      const card = button.closest('.account-card');
-      const accountId = card.dataset.accountId;
-      await runButtonAction(button, {
-        pendingText: t('probeActionRunning'),
-        successText: t('probeSuccess'),
-        refreshOnError: true
-      }, async () => {
-        await api(`/api/accounts/${accountId}/test-message`, {
-          method: 'POST',
-          body: '{}'
-        });
-        scheduleRuntimeReload(10, { fast: true, includeLogs: false });
-        scheduleRuntimeReload(220);
-      }).catch(() => {});
-    };
-  });
-
-  document.querySelectorAll('.switch-account').forEach((button) => {
-    button.onclick = async () => {
-      const card = button.closest('.account-card');
-      const accountId = card.dataset.accountId;
-      await runButtonAction(button, {
-        pendingText: currentUiLanguage() === 'en' ? 'Switching...' : '切换中...',
-        successText: t('switchedToAccount', { name: displayAccountName(readCardFieldSnapshot(card)) })
-      }, async () => {
-        await api(`/api/accounts/${accountId}/switch`, {
-          method: 'POST',
-          body: '{}'
-        });
-        scheduleRuntimeReload(10, { fast: true, includeLogs: false });
-        scheduleRuntimeReload(220);
-      }).catch(() => {});
+      await startWorkspaceBootstrapFromCard(card, button).catch(() => {});
     };
   });
 
@@ -2317,14 +2193,14 @@ function bindDynamicHandlers() {
       const card = button.closest('.account-card');
       const accountId = card.dataset.accountId;
       await runButtonAction(button, {
-        pendingText: currentUiLanguage() === 'en' ? 'Logging out...' : '退出中...',
-        successText: t('logoutServerRetained')
+        pendingText: '提交退出...',
+        successText: '已受理退出留存'
       }, async () => {
         await api(`/api/accounts/${accountId}/logout`, {
           method: 'POST',
           body: '{}'
         });
-        scheduleRuntimeReload(10, { fast: true, includeLogs: false });
+        scheduleRuntimeReload(10, { includeLogs: false });
         scheduleRuntimeReload(220);
       }).catch(() => {});
     };
@@ -2335,17 +2211,124 @@ function bindDynamicHandlers() {
       const card = button.closest('.account-card');
       const accountId = card.dataset.accountId;
       const label = card.querySelector('.account-title').textContent.trim();
-      if (!window.confirm(t('deleteAccountConfirm', { label }))) return;
+      if (!window.confirm(`确定删除 ${label} 吗？这会同时删除服务器上保存的 profile、认证任务和临时认证文件`)) return;
       await runButtonAction(button, {
-        pendingText: currentUiLanguage() === 'en' ? 'Deleting...' : '删除中...',
-        successText: t('accountDeleted')
+        pendingText: '删除中...',
+        successText: '账号及后台留存已删除'
       }, async () => {
         await api(`/api/accounts/${accountId}`, {
           method: 'DELETE',
           body: '{}'
         });
+        mutateRuntime((runtime) => {
+          runtime.slots = (runtime.slots || []).filter((slot) => slot.id !== accountId);
+        }, { includeLogs: false });
         if (state.selectedAccountId === accountId) state.selectedAccountId = null;
-        scheduleRuntimeReload(10, { fast: true, includeLogs: false });
+        scheduleRuntimeReload(10, { includeLogs: false });
+        scheduleRuntimeReload(220);
+      }).catch(() => {});
+    };
+  });
+
+  document.querySelectorAll('.auth-profile-switch').forEach((button) => {
+    button.onclick = async () => {
+      const card = button.closest('.account-card');
+      const accountId = card.dataset.accountId;
+      const authProfileId = button.dataset.authProfileId || '';
+      await runButtonAction(button, {
+        pendingText: '提交切换...',
+        successText: '已受理认证切换'
+      }, async () => {
+        await api(`/api/accounts/${accountId}/switch`, {
+          method: 'POST',
+          body: JSON.stringify({ authProfileId })
+        });
+        scheduleRuntimeReload(10, { includeLogs: false });
+        scheduleRuntimeReload(220);
+      }).catch(() => {});
+    };
+  });
+
+  document.querySelectorAll('.auth-profile-reauth').forEach((button) => {
+    button.onclick = async () => {
+      const card = button.closest('.account-card');
+      const accountId = card.dataset.accountId;
+      const authProfileId = button.dataset.authProfileId || '';
+      await runButtonAction(button, {
+        pendingText: '重置认证中...',
+        successText: '新的设备码已生成'
+      }, async () => {
+        const result = await startBootstrapTask(accountId, {
+          restart: true,
+          authProfileId
+        });
+        optimisticBootstrapStart(result);
+      }).catch(() => {});
+    };
+  });
+
+  document.querySelectorAll('.auth-profile-set-primary').forEach((button) => {
+    button.onclick = async () => {
+      const card = button.closest('.account-card');
+      const accountId = card.dataset.accountId;
+      const authProfileId = button.dataset.authProfileId || '';
+      await runButtonAction(button, {
+        pendingText: '设置中...',
+        successText: '已设为主工作区'
+      }, async () => {
+        await api(`/api/accounts/${accountId}/auth-profiles/${authProfileId}/primary`, {
+          method: 'POST',
+          body: '{}'
+        });
+        scheduleRuntimeReload(10, { includeLogs: false });
+        scheduleRuntimeReload(220);
+      }).catch(() => {});
+    };
+  });
+
+  document.querySelectorAll('.auth-profile-rename').forEach((button) => {
+    button.onclick = async () => {
+      const card = button.closest('.account-card');
+      const accountId = card.dataset.accountId;
+      const authProfileId = button.dataset.authProfileId || '';
+      const workspacePanel = button.closest('.workspace-panel');
+      const currentLabel = workspacePanel?.querySelector('.workspace-panel__title h5')?.textContent?.trim() || '';
+      const nextLabel = window.prompt('修改工作区名称', currentLabel);
+      if (nextLabel == null) return;
+      const workspaceLabel = String(nextLabel).trim();
+      if (!workspaceLabel) {
+        showToast('工作区名称不能为空', 'warning');
+        return;
+      }
+      await runButtonAction(button, {
+        pendingText: '保存中...',
+        successText: '工作区名称已更新'
+      }, async () => {
+        await api(`/api/accounts/${accountId}/auth-profiles/${authProfileId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ workspaceLabel })
+        });
+        scheduleRuntimeReload(10, { includeLogs: false });
+        scheduleRuntimeReload(220);
+      }).catch(() => {});
+    };
+  });
+
+  document.querySelectorAll('.auth-profile-delete').forEach((button) => {
+    button.onclick = async () => {
+      const card = button.closest('.account-card');
+      const accountId = card.dataset.accountId;
+      const authProfileId = button.dataset.authProfileId || '';
+      if (!window.confirm('确定删除这个工作区认证吗？')) return;
+      await runButtonAction(button, {
+        pendingText: '删除中...',
+        successText: '工作区已移除'
+      }, async () => {
+        await api(`/api/accounts/${accountId}/auth-profiles/${authProfileId}`, {
+          method: 'DELETE',
+          body: '{}'
+        });
+        scheduleRuntimeReload(10, { includeLogs: false });
         scheduleRuntimeReload(220);
       }).catch(() => {});
     };
@@ -2357,9 +2340,9 @@ function bindDynamicHandlers() {
       if (!code || code === '--') return;
       try {
         await navigator.clipboard.writeText(code);
-        showToast(t('copiedDeviceCode', { code }), 'success');
+        showToast(`设备码 ${code} 已复制`, 'success');
       } catch (_) {
-        showToast(`${t('deviceCodeLabel')}: ${code}`, 'warning');
+        showToast(`设备码：${code}`, 'warning');
       }
     };
   });
@@ -2370,9 +2353,9 @@ function bindDynamicHandlers() {
       if (!email) return;
       try {
         await navigator.clipboard.writeText(email);
-        showToast(t('copiedTargetAccount', { email }), 'success');
+        showToast(`目标账号 ${email} 已复制`, 'success');
       } catch (_) {
-        showToast(`${t('targetAccountLabel')}: ${email}`, 'warning');
+        showToast(`目标账号：${email}`, 'warning');
       }
     };
   });
@@ -2383,7 +2366,7 @@ function bindDynamicHandlers() {
       if (!url) return;
       try {
         await navigator.clipboard.writeText(url);
-        showToast(t('copiedAuthLink'), 'success');
+        showToast('认证链接已复制', 'success');
       } catch (_) {
         showToast(url, 'warning');
       }
@@ -2395,19 +2378,25 @@ function bindDynamicHandlers() {
       const url = button.dataset.authOpenUrl || '';
       if (!url) return;
       window.open(url, '_blank', 'noopener');
-      showToast(t('openedAuthLink'), 'success');
+      showToast('认证链接已在新标签打开', 'success');
     };
   });
 
   document.querySelectorAll('.inline-restart-bootstrap').forEach((button) => {
     button.onclick = async () => {
       const slotId = button.dataset.slotId || '';
+      const authProfileId = button.dataset.authProfileId || '';
+      const workspaceLabel = button.dataset.workspaceLabel || '';
       if (!slotId) return;
       await runButtonAction(button, {
-        pendingText: currentUiLanguage() === 'en' ? 'Resetting...' : '重置中...',
-        successText: t('restartedBootstrap')
+        pendingText: '重置中...',
+        successText: '新的设备码已生成'
       }, async () => {
-        const result = await startBootstrapTask(slotId, { restart: true });
+        const result = await startBootstrapTask(slotId, {
+          restart: true,
+          authProfileId: authProfileId || null,
+          workspaceLabel: workspaceLabel || null
+        });
         optimisticBootstrapStart(result);
       }).catch(() => {});
     };
@@ -2418,8 +2407,8 @@ function bindDynamicHandlers() {
       const bootstrapId = button.dataset.bootstrapId || '';
       if (!bootstrapId) return;
       await runButtonAction(button, {
-        pendingText: currentUiLanguage() === 'en' ? 'Clearing...' : '清除中...',
-        successText: t('bootstrapDeleted'),
+        pendingText: '清除中...',
+        successText: '认证任务已清除',
         refreshOnError: true
       }, async () => {
         optimisticBootstrapDelete(bootstrapId);
@@ -2428,7 +2417,7 @@ function bindDynamicHandlers() {
           body: '{}'
         });
         state.openBootstrapLogIds.delete(bootstrapId);
-        scheduleRuntimeReload(10, { fast: true, includeLogs: false });
+        scheduleRuntimeReload(10, { includeLogs: false });
         scheduleRuntimeReload(220);
       }).catch(() => {});
     };
@@ -2444,12 +2433,68 @@ function bindDynamicHandlers() {
   });
 }
 
+function focusWorkspaceCreatePanel(card) {
+  if (!card) return;
+  const panel = card.querySelector('.auth-profile-create-panel');
+  const input = card.querySelector('.workspace-label-input');
+  panel?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  input?.focus();
+}
+
+async function startWorkspaceBootstrapFromCard(card, button) {
+  if (!card || !button) return;
+  const accountId = card.dataset.accountId;
+  const workspaceInput = card.querySelector('.workspace-label-input');
+  const workspaceLabel = String(workspaceInput?.value || '').trim();
+  const hasProfile = card.dataset.hasProfile === '1';
+
+  if (hasProfile && !workspaceLabel) {
+    workspaceInput?.focus();
+    showToast('请先填写工作区名称，再创建新的工作区认证', 'warning');
+    return;
+  }
+
+  await runButtonAction(button, {
+    pendingText: '创建任务中...',
+    successText: hasProfile ? '工作区认证任务已创建' : '认证任务已创建，直接打开认证页即可继续',
+    refreshOnError: true
+  }, async () => {
+    const result = await startBootstrapTask(accountId, {
+      restart: false,
+      workspaceLabel
+    });
+    if (workspaceInput) workspaceInput.value = '';
+    optimisticBootstrapStart(result);
+  });
+}
+
 function startRuntimeRefreshLoop() {
   if (state.refreshTimer) clearInterval(state.refreshTimer);
-  const settings = runtimeSettings();
-  state.refreshTimer = setInterval(() => {
-    scheduleRuntimeReload(0);
-  }, settings.runtimeRefreshIntervalMs || REFRESH_INTERVAL_MS);
+  if (state.refreshCountdownTimer) clearInterval(state.refreshCountdownTimer);
+  state.refreshTimer = null;
+  state.refreshCountdownTimer = null;
+
+  const seconds = Number(state.refreshSeconds || 0);
+  state.refreshCountdown = seconds;
+  renderRefreshNote();
+
+  if (seconds <= 0) return;
+
+  state.refreshCountdownTimer = window.setInterval(() => {
+    const runtimeRefresh = state.runtime && state.runtime.runtimeRefresh ? state.runtime.runtimeRefresh : null;
+    if (state.loadingRuntime || state.refreshPending || (runtimeRefresh && runtimeRefresh.state === 'syncing')) {
+      renderRefreshNote();
+      return;
+    }
+    state.refreshCountdown = Math.max(0, Number(state.refreshCountdown || seconds) - 1);
+    renderRefreshNote();
+    if (state.refreshCountdown <= 0) {
+      state.refreshCountdown = seconds;
+      triggerRuntimeRefresh('auto', {
+        slotId: state.selectedAccountId || null
+      }).catch(console.error);
+    }
+  }, 1000);
 }
 
 function startEventStream() {
@@ -2463,39 +2508,35 @@ function startEventStream() {
 }
 
 async function initDashboard(session) {
+  state.initialRefreshRequested = false;
   document.body.classList.remove('is-login-mode');
   document.getElementById('loginPanel').classList.add('hidden');
   document.getElementById('dashboardPanel').classList.remove('hidden');
   document.getElementById('createAccountBtn').classList.remove('hidden');
   document.getElementById('logoutBtn').classList.remove('hidden');
+  document.getElementById('refreshControlHost').classList.remove('hidden');
+  document.getElementById('exchangeModalToggleBtn').classList.remove('hidden');
+  document.getElementById('autoSwitchToggleBtn').classList.remove('hidden');
   document.getElementById('timeDisplayToggleBtn').classList.remove('hidden');
   document.getElementById('accountPrivacyToggleBtn').classList.remove('hidden');
-  renderWorkspaceGuide();
   setSessionBadge(session.user.email);
+  syncRefreshControls();
+  syncAccountFilterControls();
+  syncAutoSwitchButton();
   renderRuntimeTimestamp(new Date().toISOString());
-  loadRuntime({ fast: true, includeLogs: false })
-    .catch(console.error)
-    .finally(() => {
-      window.setTimeout(() => {
-        loadRuntime().catch(console.error);
-      }, 80);
-    });
+  await loadRuntime({ includeLogs: false }).catch(console.error);
+  maybeRequestInitialRefresh();
+  scheduleDeferredLogsLoad();
   startRuntimeRefreshLoop();
   startEventStream();
 }
 
 async function initApp() {
   try {
-    const storedLanguage = window.localStorage.getItem(UI_LANGUAGE_STORAGE_KEY);
-    if (storedLanguage === 'en' || storedLanguage === 'zh-CN') state.uiLanguage = storedLanguage;
-  } catch (_) {
-    state.uiLanguage = 'zh-CN';
-  }
-  try {
     const stored = window.localStorage.getItem(TIME_DISPLAY_STORAGE_KEY);
     if (stored === 'local' || stored === 'server') state.timeDisplayMode = stored;
   } catch (_) {
-    state.timeDisplayMode = 'server';
+    state.timeDisplayMode = 'local';
   }
   try {
     state.accountPrivacyEnabled = window.localStorage.getItem(ACCOUNT_PRIVACY_STORAGE_KEY) === '1';
@@ -2503,23 +2544,43 @@ async function initApp() {
     state.accountPrivacyEnabled = false;
   }
   try {
-    const publicConfig = await fetch('/api/public-config', { credentials: 'include' }).then((res) => res.json());
-    if (publicConfig && publicConfig.ok) {
-      state.publicConfig = {
-        defaultUiLanguage: publicConfig.defaultUiLanguage || 'zh-CN',
-        codeWorkspaceUrl: publicConfig.codeWorkspaceUrl || '',
-        codeOrigin: publicConfig.codeOrigin || ''
-      };
-      if (!(window.localStorage.getItem(UI_LANGUAGE_STORAGE_KEY) === 'en' || window.localStorage.getItem(UI_LANGUAGE_STORAGE_KEY) === 'zh-CN')) {
-        state.uiLanguage = state.publicConfig.defaultUiLanguage === 'en' ? 'en' : 'zh-CN';
-      }
+    const refreshStoredRaw = window.localStorage.getItem(REFRESH_SECONDS_STORAGE_KEY);
+    if (refreshStoredRaw != null && refreshStoredRaw !== '') {
+      const refreshStored = Number(refreshStoredRaw);
+      if (Number.isFinite(refreshStored)) state.refreshSeconds = Math.max(0, Math.min(600, Math.trunc(refreshStored)));
     }
   } catch (_) {
-    // ignore public config failures and keep defaults
+    state.refreshSeconds = 10;
   }
-  applyStaticTranslations();
+  state.refreshCountdown = state.refreshSeconds;
+  try {
+    const storedSort = window.localStorage.getItem(ACCOUNT_SORT_STORAGE_KEY);
+    if (storedSort) state.accountSort = storedSort;
+  } catch (_) {
+    state.accountSort = 'availability';
+  }
+  try {
+    const storedFilter = window.localStorage.getItem(ACCOUNT_FILTER_STORAGE_KEY);
+    if (storedFilter) state.accountFilter = storedFilter;
+  } catch (_) {
+    state.accountFilter = 'all';
+  }
+  try {
+    const storedLoginMethodFilter = window.localStorage.getItem(ACCOUNT_LOGIN_METHOD_FILTER_STORAGE_KEY);
+    if (storedLoginMethodFilter) state.accountLoginMethodFilter = storedLoginMethodFilter;
+  } catch (_) {
+    state.accountLoginMethodFilter = 'all';
+  }
+  try {
+    state.accountSearch = window.localStorage.getItem(ACCOUNT_SEARCH_STORAGE_KEY) || '';
+  } catch (_) {
+    state.accountSearch = '';
+  }
   syncTimeDisplayButton();
   syncAccountPrivacyButton();
+  syncAutoSwitchButton();
+  syncRefreshControls();
+  syncAccountFilterControls();
   const sessionPromise = fetch('/api/session', { credentials: 'include' }).then((res) => res.json());
   refreshCsrf().catch(() => {});
   const session = await sessionPromise;
@@ -2529,9 +2590,12 @@ async function initApp() {
     document.getElementById('dashboardPanel').classList.add('hidden');
     document.getElementById('createAccountBtn').classList.add('hidden');
     document.getElementById('logoutBtn').classList.add('hidden');
+    document.getElementById('refreshControlHost').classList.add('hidden');
+    document.getElementById('exchangeModalToggleBtn').classList.add('hidden');
+    document.getElementById('autoSwitchToggleBtn').classList.add('hidden');
     document.getElementById('timeDisplayToggleBtn').classList.add('hidden');
     document.getElementById('accountPrivacyToggleBtn').classList.add('hidden');
-    setSessionBadge(t('sessionLoggedOut'));
+    setSessionBadge('未登录');
     return;
   }
 
@@ -2543,8 +2607,8 @@ document.getElementById('loginForm').addEventListener('submit', async (event) =>
   await refreshCsrf();
   const submitButton = event.submitter || event.currentTarget.querySelector('button[type="submit"]');
   await runButtonAction(submitButton, {
-    pendingText: t('loggingIn'),
-    successText: t('loginSuccess')
+    pendingText: '登录中...',
+    successText: '登录成功'
   }, async () => {
     await api('/api/auth/login', {
       method: 'POST',
@@ -2554,6 +2618,9 @@ document.getElementById('loginForm').addEventListener('submit', async (event) =>
       })
     });
     const session = await fetch('/api/session', { credentials: 'include' }).then((res) => res.json());
+    if (!session.authenticated) {
+      throw new Error('SESSION_COOKIE_NOT_PERSISTED');
+    }
     await initDashboard(session);
   }).catch(() => {});
 });
@@ -2561,8 +2628,8 @@ document.getElementById('loginForm').addEventListener('submit', async (event) =>
 document.getElementById('logoutBtn').addEventListener('click', async () => {
   const button = document.getElementById('logoutBtn');
   await runButtonAction(button, {
-    pendingText: t('loggingOut'),
-    successText: t('logoutSuccess')
+    pendingText: '退出中...',
+    successText: '已退出后台'
   }, async () => {
     await api('/api/auth/logout', { method: 'POST', body: '{}' });
     window.location.reload();
@@ -2572,31 +2639,23 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
 document.getElementById('createAccountBtn').addEventListener('click', async () => {
   const button = document.getElementById('createAccountBtn');
   await runButtonAction(button, {
-    pendingText: currentUiLanguage() === 'en' ? 'Creating...' : '新建中...',
-    successText: t('copiedCreateHint')
+    pendingText: '新建中...',
+    successText: '已创建空白账号'
   }, async () => {
     const result = await api('/api/accounts', {
       method: 'POST',
       body: '{}'
     });
+    resetAccountFiltersForNewAccount();
     state.selectedAccountId = result.account.id;
-    scheduleRuntimeReload(10);
+    if (state.runtime) {
+      mutateRuntime((runtime) => {
+        runtime.slots = [result.account, ...(runtime.slots || [])];
+      }, { includeLogs: false });
+    }
+    scheduleRuntimeReload(10, { includeLogs: false });
+    scheduleRuntimeReload(220);
   }).catch(() => {});
-});
-
-document.getElementById('refreshIntervalSelect').addEventListener('change', async (event) => {
-  const value = Number(event.target.value);
-  await saveRuntimeSettings({ runtimeRefreshIntervalMs: value }).catch(() => {});
-});
-
-document.getElementById('probeModeSelect').addEventListener('change', async (event) => {
-  const value = String(event.target.value) === '1';
-  await saveRuntimeSettings({ availabilityProbeEnabled: value }).catch(() => {});
-});
-
-document.getElementById('probeIntervalSelect').addEventListener('change', async (event) => {
-  const value = Number(event.target.value);
-  await saveRuntimeSettings({ availabilityProbeIntervalMs: value }).catch(() => {});
 });
 
 document.getElementById('timeDisplayToggleBtn').addEventListener('click', () => {
@@ -2625,22 +2684,252 @@ document.getElementById('accountPrivacyToggleBtn').addEventListener('click', () 
   }
   syncAccountPrivacyButton();
   if (state.runtime) renderRuntimeState();
-  setSessionBadge(state.sessionEmail || t('sessionLoggedOut'));
+  setSessionBadge(state.sessionEmail || '未登录');
 });
 
-document.getElementById('languageToggleBtn').addEventListener('click', () => {
-  state.uiLanguage = currentUiLanguage() === 'en' ? 'zh-CN' : 'en';
+document.getElementById('accountIndexList').addEventListener('click', (event) => {
+  const button = event.target.closest('.account-index-item');
+  if (!button || !state.runtime) return;
+  const accountId = button.dataset.accountId || null;
+  if (!accountId || accountId === state.selectedAccountId) return;
+  state.selectedAccountId = accountId;
+  renderAccountIndexSelection(accountId);
+  const selectedAccount = (state.runtime.slots || []).find((account) => account.id === accountId) || null;
+  renderAccountDetail(selectedAccount);
+  bindDynamicHandlers();
+});
+
+document.getElementById('manualRefreshBtn').addEventListener('click', async () => {
+  const button = document.getElementById('manualRefreshBtn');
+  await runButtonAction(button, {
+    pendingText: '刷新中...',
+    successText: '已提交后台刷新'
+  }, async () => {
+    await triggerRuntimeRefresh('manual', {
+      slotId: state.selectedAccountId || null
+    });
+  }).catch(() => {});
+});
+
+document.getElementById('exchangeModalForm').addEventListener('submit', (event) => {
+  event.preventDefault();
+});
+
+document.getElementById('exchangeModalToggleBtn').addEventListener('click', async () => {
+  openExchangeModal();
+  setExchangeStatus();
+  document.getElementById('exchangePassphraseInput')?.focus();
+});
+
+document.getElementById('exchangeModalCloseBtn').addEventListener('click', () => {
+  closeExchangeModal();
+});
+
+document.getElementById('exchangeModal').addEventListener('click', (event) => {
+  if (event.target.id === 'exchangeModal') closeExchangeModal();
+});
+
+document.getElementById('exchangeGenerateBtn').addEventListener('click', async () => {
+  const button = document.getElementById('exchangeGenerateBtn');
+  const restore = setButtonBusy(button, '生成中...');
+  setExchangeStatus();
   try {
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, state.uiLanguage);
+    const passphrase = await generateExchangePassphrase();
+    const input = document.getElementById('exchangePassphraseInput');
+    input?.focus();
+    input?.select();
+    setExchangeStatus('新的交换口令已生成', 'success');
+    return passphrase;
+  } catch (error) {
+    setExchangeStatus(explainError(error), 'error');
+  } finally {
+    restore();
+  }
+});
+
+document.getElementById('exchangeCopyBtn').addEventListener('click', async () => {
+  const passphrase = currentExchangePassphrase();
+  if (!passphrase) {
+    showToast('请先生成或输入交换口令', 'warning');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(passphrase);
+    showToast('交换口令已复制', 'success');
+  } catch (_) {
+    showToast(passphrase, 'warning');
+  }
+});
+
+document.getElementById('exportExchangeBtn').addEventListener('click', async () => {
+  const button = document.getElementById('exportExchangeBtn');
+  const passphrase = currentExchangePassphrase();
+  if (!passphrase) {
+    setExchangeStatus('请先生成或输入交换口令', 'warning');
+    return;
+  }
+  const restore = setButtonBusy(button, '导出中...');
+  setExchangeStatus();
+  try {
+    const result = await api('/api/exchange/export', {
+      method: 'POST',
+      body: JSON.stringify({
+        passphrase,
+        source: 'codex-switcher-web-ui'
+      })
+    });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    downloadJsonFile(`codex-switcher-export-${stamp}.json`, result.exportData);
+    setExchangeStatus('交换文件已导出', 'success');
+    closeExchangeModal();
+  } catch (error) {
+    setExchangeStatus(explainError(error), 'error');
+  } finally {
+    restore();
+  }
+});
+
+document.getElementById('importExchangeBtn').addEventListener('click', () => {
+  const passphrase = currentExchangePassphrase();
+  if (!passphrase) {
+    setExchangeStatus('请先生成或输入交换口令', 'warning');
+    document.getElementById('exchangeImportPassphraseInput')?.focus();
+    return;
+  }
+  document.getElementById('exchangeFileInput').click();
+});
+
+document.getElementById('exchangeFileInput').addEventListener('change', async (event) => {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  const button = document.getElementById('importExchangeBtn');
+  const passphrase = currentExchangePassphrase();
+  const strategy = document.getElementById('exchangeImportStrategySelect').value || 'merge';
+  try {
+    const raw = await file.text();
+    const data = JSON.parse(raw);
+    const restore = setButtonBusy(button, '导入中...');
+    setExchangeStatus();
+    try {
+      await api('/api/exchange/import', {
+        method: 'POST',
+        body: JSON.stringify({
+          passphrase,
+          strategy,
+          data
+        })
+      });
+      scheduleRuntimeReload(10);
+      scheduleRuntimeReload(220);
+      setExchangeStatus('交换文件已导入', 'success');
+      closeExchangeModal();
+    } catch (error) {
+      setExchangeStatus(explainError(error), 'error');
+    } finally {
+      restore();
+    }
+  } catch (error) {
+    setExchangeStatus(explainError(error), 'error');
+  } finally {
+    event.target.value = '';
+  }
+});
+
+['exchangePassphraseInput', 'exchangeImportPassphraseInput'].forEach((id) => {
+  const input = document.getElementById(id);
+  if (!input) return;
+  input.addEventListener('input', (event) => {
+    const value = String(event.target.value || '');
+    exchangePassphraseInputs().forEach((node) => {
+      if (node !== event.target) node.value = value;
+    });
+    if (value.trim()) armExchangePassphraseDestroyTimer();
+    else clearExchangePassphrase({ preserveValue: false });
+  });
+});
+
+document.getElementById('autoSwitchToggleBtn').addEventListener('click', async () => {
+  const button = document.getElementById('autoSwitchToggleBtn');
+  const nextValue = !(state.settings && state.settings.autoSwitchEnabled);
+  await runButtonAction(button, {
+    pendingText: nextValue ? '开启中...' : '关闭中...',
+    successText: nextValue ? '自动切换已开启' : '自动切换已关闭'
+  }, async () => {
+    const result = await api('/api/runtime/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        autoSwitchEnabled: nextValue
+      })
+    });
+    state.settings.autoSwitchEnabled = !!(result.settings && result.settings.auto_switch_enabled);
+    syncAutoSwitchButton();
+  }).catch(() => {});
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && isExchangeModalOpen()) {
+    closeExchangeModal();
+  }
+});
+
+document.getElementById('refreshIntervalSelect').addEventListener('change', (event) => {
+  const value = event.target.value;
+  if (value === 'custom') {
+    const customInput = document.getElementById('refreshCustomInput');
+    customInput.classList.remove('hidden');
+    customInput.focus();
+    customInput.select();
+    return;
+  }
+  setRefreshSeconds(Number(value));
+});
+
+document.getElementById('refreshCustomInput').addEventListener('change', (event) => {
+  setRefreshSeconds(Number(event.target.value || 10));
+});
+
+document.getElementById('refreshCustomInput').addEventListener('blur', (event) => {
+  setRefreshSeconds(Number(event.target.value || 10));
+});
+
+document.getElementById('accountSearchInput').addEventListener('input', (event) => {
+  state.accountSearch = event.target.value || '';
+  try {
+    window.localStorage.setItem(ACCOUNT_SEARCH_STORAGE_KEY, state.accountSearch);
   } catch (_) {
     // ignore localStorage failures
   }
-  applyStaticTranslations();
-  if (state.runtime) {
-    renderRuntimeTimestamp(state.runtime.now || new Date().toISOString());
-    renderRuntimeState();
+  if (state.runtime) renderRuntimeState({ includeLogs: false });
+});
+
+document.getElementById('accountSortSelect').addEventListener('change', (event) => {
+  state.accountSort = event.target.value || 'availability';
+  try {
+    window.localStorage.setItem(ACCOUNT_SORT_STORAGE_KEY, state.accountSort);
+  } catch (_) {
+    // ignore localStorage failures
   }
-  setSessionBadge(state.sessionEmail || t('sessionLoggedOut'));
+  if (state.runtime) renderRuntimeState({ includeLogs: false });
+});
+
+document.getElementById('accountFilterSelect').addEventListener('change', (event) => {
+  state.accountFilter = event.target.value || 'all';
+  try {
+    window.localStorage.setItem(ACCOUNT_FILTER_STORAGE_KEY, state.accountFilter);
+  } catch (_) {
+    // ignore localStorage failures
+  }
+  if (state.runtime) renderRuntimeState({ includeLogs: false });
+});
+
+document.getElementById('accountLoginMethodFilterSelect').addEventListener('change', (event) => {
+  state.accountLoginMethodFilter = event.target.value || 'all';
+  try {
+    window.localStorage.setItem(ACCOUNT_LOGIN_METHOD_FILTER_STORAGE_KEY, state.accountLoginMethodFilter);
+  } catch (_) {
+    // ignore localStorage failures
+  }
+  if (state.runtime) renderRuntimeState({ includeLogs: false });
 });
 
 const clearBootstrapTasksBtn = document.getElementById('clearBootstrapTasksBtn');
@@ -2649,17 +2938,17 @@ if (clearBootstrapTasksBtn) {
     const button = clearBootstrapTasksBtn;
     const sessions = state.runtime && Array.isArray(state.runtime.bootstrapSessions) ? state.runtime.bootstrapSessions : [];
     if (!sessions.length) return;
-    if (!window.confirm(t('clearAllBootstrapConfirm', { count: sessions.length }))) return;
+    if (!window.confirm(`确定一键清除全部 ${sessions.length} 个认证任务吗？正在进行中的认证也会被终止`)) return;
     await runButtonAction(button, {
-      pendingText: currentUiLanguage() === 'en' ? 'Clearing...' : '清除中...',
-      successText: t('clearedBootstrapTasks', { count: sessions.length })
+      pendingText: '清除中...',
+      successText: `已清除 ${sessions.length} 个认证任务`
     }, async () => {
       await api('/api/bootstrap-sessions', {
         method: 'DELETE',
         body: '{}'
       });
       state.openBootstrapLogIds.clear();
-      scheduleRuntimeReload(10, { fast: true, includeLogs: false });
+      scheduleRuntimeReload(10, { includeLogs: false });
       scheduleRuntimeReload(220);
     }).catch(() => {});
   });
@@ -2739,10 +3028,10 @@ document.getElementById('clearSwitchLogsBtn').addEventListener('click', async ()
   const button = document.getElementById('clearSwitchLogsBtn');
   const count = (state.recentSwitches || []).length;
   if (!count) return;
-  if (!window.confirm(t('clearSwitchLogsConfirm', { count }))) return;
+  if (!window.confirm(`确定清空最近 ${count} 条切换记录吗？这个操作不可恢复`)) return;
   await runButtonAction(button, {
-    pendingText: currentUiLanguage() === 'en' ? 'Clearing...' : '清空中...',
-    successText: t('clearSwitchLogsSuccess', { count })
+    pendingText: '清空中...',
+    successText: `已清空 ${count} 条切换记录`
   }, async () => {
     state.switchLogPage = 1;
     await api('/api/logs/switches', {
@@ -2757,10 +3046,10 @@ document.getElementById('clearSampleLogsBtn').addEventListener('click', async ()
   const button = document.getElementById('clearSampleLogsBtn');
   const count = (state.recentSamples || []).length;
   if (!count) return;
-  if (!window.confirm(t('clearSampleLogsConfirm', { count }))) return;
+  if (!window.confirm(`确定清空最近 ${count} 条额度快照吗？这个操作不可恢复`)) return;
   await runButtonAction(button, {
-    pendingText: currentUiLanguage() === 'en' ? 'Clearing...' : '清空中...',
-    successText: t('clearSampleLogsSuccess', { count })
+    pendingText: '清空中...',
+    successText: `已清空 ${count} 条额度快照`
   }, async () => {
     state.sampleLogPage = 1;
     await api('/api/logs/quota-samples', {

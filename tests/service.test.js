@@ -16,7 +16,7 @@ process.env.DB_PATH = path.join(tempRoot, 'codex-switcher.db');
 process.env.AUDIT_LOG_PATH = path.join(tempRoot, 'audit.log');
 
 const { seedDefaultSlots } = require('../server/db');
-const { resolveAppSettings, updateAppSettings } = require('../server/service');
+const { getRuntimeSettings, updateRuntimeSettings } = require('../server/service');
 
 seedDefaultSlots();
 
@@ -24,29 +24,22 @@ test.after(() => {
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
-test('resolveAppSettings returns seeded defaults', () => {
-  const settings = resolveAppSettings();
-  assert.equal(settings.runtimeRefreshIntervalMs, 30000);
-  assert.equal(settings.availabilityProbeEnabled, true);
-  assert.equal(settings.availabilityProbeIntervalMs, 900000);
+test('getRuntimeSettings returns seeded defaults', () => {
+  const settings = getRuntimeSettings();
+  assert.equal(settings.auto_switch_enabled, false);
+  assert.ok(settings.updated_at);
 });
 
-test('updateAppSettings persists allowed values', () => {
-  const settings = updateAppSettings({
-    runtimeRefreshIntervalMs: 60000,
-    availabilityProbeEnabled: false,
-    availabilityProbeIntervalMs: 1800000
+test('updateRuntimeSettings persists allowed values', () => {
+  const settings = updateRuntimeSettings({
+    auto_switch_enabled: true
   });
-  assert.equal(settings.runtimeRefreshIntervalMs, 60000);
-  assert.equal(settings.availabilityProbeEnabled, false);
-  assert.equal(settings.availabilityProbeIntervalMs, 1800000);
+  assert.equal(settings.auto_switch_enabled, true);
+  assert.ok(settings.updated_at);
 });
 
-test('updateAppSettings ignores unsupported refresh values', () => {
-  const settings = updateAppSettings({
-    runtimeRefreshIntervalMs: 45000,
-    availabilityProbeIntervalMs: 123456
-  });
-  assert.equal(settings.runtimeRefreshIntervalMs, 60000);
-  assert.equal(settings.availabilityProbeIntervalMs, 1800000);
+test('updateRuntimeSettings preserves known values when patch is empty', () => {
+  updateRuntimeSettings({ auto_switch_enabled: true });
+  const settings = updateRuntimeSettings({});
+  assert.equal(settings.auto_switch_enabled, true);
 });

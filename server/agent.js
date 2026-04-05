@@ -2,45 +2,24 @@
 
 const fs = require('fs');
 const http = require('http');
-const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { URL } = require('url');
 const { atomicWriteFile } = require('./file-ops');
 
-function requireAgentSecret(name, fallback = '') {
-  const value = String(process.env[name] || fallback).trim();
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  if (
-    value === 'change-me-before-production-agent-secret'
-    || value === 'replace-with-random-secret'
-    || value.length < 24
-  ) {
-    throw new Error(`Unsafe ${name}. Generate a real shared secret before startup.`);
-  }
-  return value;
-}
-
-const AGENT_SHARED_SECRET = requireAgentSecret('CODEX_AGENT_SHARED_SECRET', 'change-me-before-production-agent-secret');
+const AGENT_SHARED_SECRET = process.env.CODEX_AGENT_SHARED_SECRET || 'change-me-before-production-agent-secret';
 const SOCKET_PATH = process.env.CODEX_AGENT_SOCKET_PATH || '/run/codex-switcher/agent.sock';
-const ACTIVE_CODEX_HOME = process.env.CODEX_ACTIVE_HOME || '/codex-home';
+const ACTIVE_CODEX_HOME = process.env.CODEX_ACTIVE_HOME || '/root/.codex';
 const ACTIVE_AUTH_PATH = process.env.CODEX_ACTIVE_AUTH_PATH || path.join(ACTIVE_CODEX_HOME, 'auth.json');
-const BACKUP_DIR = process.env.CODEX_AGENT_BACKUP_DIR || '/data/agent';
-const BOOTSTRAP_ROOT = process.env.CODEX_BOOTSTRAP_ROOT || '/data/bootstrap';
+const BACKUP_DIR = process.env.CODEX_AGENT_BACKUP_DIR || '/var/lib/codex-switcher/agent';
+const BOOTSTRAP_ROOT = process.env.CODEX_BOOTSTRAP_ROOT || '/var/lib/codex-switcher/bootstrap';
 const CODEX_BINARY = process.env.CODEX_BINARY || 'codex';
 const CHATGPT_BACKEND_BASE = process.env.CODEX_CHATGPT_BACKEND_BASE || 'https://chatgpt.com/backend-api';
 const AUTH_TOKEN_URL = process.env.CODEX_AUTH_TOKEN_URL || 'https://auth.openai.com/oauth/token';
 const ACCESS_TOKEN_REFRESH_SKEW_MS = Number(process.env.CODEX_ACCESS_TOKEN_REFRESH_SKEW_MS || 5 * 60 * 1000);
 const REQUEST_ORIGINATOR = process.env.CODEX_REQUEST_ORIGINATOR || 'codex_vscode';
-const PROBE_TIMEOUT_MS = Number(process.env.CODEX_PROBE_TIMEOUT_MS || 45 * 1000);
-const PROBE_PROMPT = process.env.CODEX_PROBE_PROMPT || 'Reply with exactly: OK';
-const SHARED_AUTH_UID = Number.isFinite(Number(process.env.CODEX_SHARED_AUTH_UID)) ? Number(process.env.CODEX_SHARED_AUTH_UID) : 1000;
-const SHARED_AUTH_GID = Number.isFinite(Number(process.env.CODEX_SHARED_AUTH_GID)) ? Number(process.env.CODEX_SHARED_AUTH_GID) : 1000;
-const SHARED_AUTH_MODE = /^0?[0-7]{3,4}$/.test(String(process.env.CODEX_SHARED_AUTH_MODE || ''))
-  ? Number.parseInt(String(process.env.CODEX_SHARED_AUTH_MODE), 8)
-  : 0o640;
+const TOKEN_REFRESH_TIMEOUT_MS = Number(process.env.TOKEN_REFRESH_TIMEOUT_MS || 5000);
+const USAGE_REQUEST_TIMEOUT_MS = Number(process.env.USAGE_REQUEST_TIMEOUT_MS || 4000);
 
 const sessions = new Map();
 const ANSI_PATTERN = /\u001B\[[0-9;]*m/g;
@@ -63,33 +42,30 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 5000, timeoutError = 'REQUEST_TIMEOUT') {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(timeoutError)), Math.max(1000, timeoutMs));
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error && error.name === 'AbortError') {
+      throw new Error(timeoutError);
+    }
+    const message = describeThrownError(error, timeoutError);
+    if (message === timeoutError) {
+      throw new Error(timeoutError);
+    }
+    throw new Error(message);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function ensureDir(dirPath, mode = 0o700) {
   fs.mkdirSync(dirPath, { recursive: true, mode });
-}
-
-function sharedAuthWriteOptions() {
-  return {
-    mode: SHARED_AUTH_MODE,
-    uid: SHARED_AUTH_UID,
-    gid: SHARED_AUTH_GID
-  };
-}
-
-function reconcileSharedAuthPermissions(filePath) {
-  if (!fs.existsSync(filePath)) return;
-  try {
-    const opts = sharedAuthWriteOptions();
-    if (Number.isInteger(opts.uid) || Number.isInteger(opts.gid)) {
-      fs.chownSync(
-        filePath,
-        Number.isInteger(opts.uid) ? opts.uid : -1,
-        Number.isInteger(opts.gid) ? opts.gid : -1
-      );
-    }
-    fs.chmodSync(filePath, opts.mode);
-  } catch (error) {
-    console.warn(`Failed to reconcile permissions for ${filePath}: ${error.message}`);
-  }
 }
 
 function parseJsonSafely(text, fallback = null) {
@@ -98,6 +74,68 @@ function parseJsonSafely(text, fallback = null) {
   } catch (_) {
     return fallback;
   }
+}
+
+function describeAgentErrorValue(value) {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return '';
+    if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+      const parsed = parseJsonSafely(text, null);
+      if (parsed && parsed !== value) return describeAgentErrorValue(parsed);
+    }
+    return text;
+  }
+  if (value == null) return '';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    return describeAgentErrorValue(value.message)
+      || describeAgentErrorValue(value.error_description)
+      || describeAgentErrorValue(value.error)
+      || describeAgentErrorValue(value.code)
+      || describeAgentErrorValue(value.type)
+      || (() => {
+        try {
+          const serialized = JSON.stringify(value);
+          return serialized === '{}' || serialized === '[]' ? '' : serialized;
+        } catch (_) {
+          return String(value);
+        }
+      })();
+  }
+  return String(value).trim();
+}
+
+function describeThrownError(error, fallback = 'UNKNOWN_AGENT_ERROR') {
+  const text = describeAgentErrorValue(error);
+  return text && text !== '[object Object]' ? text : fallback;
+}
+
+function buildApiErrorMessage(prefix, statusCode, payload, rawText = '') {
+  const base = `${prefix}_${statusCode}`;
+  const normalizedPayload = payload && typeof payload === 'object' ? payload : null;
+  const payloadMessage = describeAgentErrorValue(normalizedPayload && (
+    normalizedPayload.error_description
+    || normalizedPayload.error
+    || normalizedPayload.message
+  ));
+  const payloadCode = describeAgentErrorValue(normalizedPayload && (
+    normalizedPayload.code
+    || (normalizedPayload.error && normalizedPayload.error.code)
+  ));
+  const rawMessage = (() => {
+    const text = String(rawText || '').trim();
+    if (!text) return '';
+    const parsed = parseJsonSafely(text, null);
+    if (parsed && typeof parsed === 'object') return describeAgentErrorValue(parsed);
+    return text.slice(0, 240);
+  })();
+  const message = payloadMessage || rawMessage;
+  if (!message) return base;
+  if (payloadCode && !message.includes(payloadCode)) {
+    return `${base}: ${message} [${payloadCode}]`;
+  }
+  return `${base}: ${message}`;
 }
 
 function decodeIdToken(idToken) {
@@ -167,21 +205,6 @@ function emptyAuthRecord() {
   return buildAuthRecordFromParsed({});
 }
 
-function withTemporaryAuthWorkspace(authJson, handler) {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-switcher-probe-'));
-  const home = path.join(tempRoot, 'home');
-  const codexHome = path.join(home, '.codex');
-  const workdir = path.join(tempRoot, 'workspace');
-  ensureDir(codexHome, 0o700);
-  ensureDir(workdir, 0o700);
-  atomicWriteFile(path.join(codexHome, 'auth.json'), authJson, { mode: 0o600 });
-  try {
-    return handler({ tempRoot, home, codexHome, workdir });
-  } finally {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
-  }
-}
-
 function readCurrentAuthRecord() {
   if (!fs.existsSync(ACTIVE_AUTH_PATH)) {
     return emptyAuthRecord();
@@ -210,7 +233,7 @@ function readCurrentAuth() {
 
 function writeCurrentAuthRecord(parsed) {
   const nextRecord = buildAuthRecordFromParsed(parsed);
-  atomicWriteFile(ACTIVE_AUTH_PATH, nextRecord.authJson, sharedAuthWriteOptions());
+  atomicWriteFile(ACTIVE_AUTH_PATH, nextRecord.authJson);
   return readCurrentAuthRecord();
 }
 
@@ -220,7 +243,7 @@ function getBackupPath() {
 }
 
 function saveBackup(authJson) {
-  atomicWriteFile(getBackupPath(), authJson, sharedAuthWriteOptions());
+  atomicWriteFile(getBackupPath(), authJson);
 }
 
 function restoreBackup() {
@@ -229,7 +252,7 @@ function restoreBackup() {
     throw new Error('NO_BACKUP_AVAILABLE');
   }
   const backupJson = fs.readFileSync(backupPath, 'utf8');
-  atomicWriteFile(ACTIVE_AUTH_PATH, backupJson, sharedAuthWriteOptions());
+  atomicWriteFile(ACTIVE_AUTH_PATH, backupJson);
   return readCurrentAuth();
 }
 
@@ -281,17 +304,18 @@ async function refreshAccessTokenForRecord(record, options = {}) {
     client_id: current.clientId
   });
 
-  const response = await fetch(AUTH_TOKEN_URL, {
+  const response = await fetchWithTimeout(AUTH_TOKEN_URL, {
     method: 'POST',
     headers: {
       'content-type': 'application/x-www-form-urlencoded'
     },
     body
-  });
+  }, TOKEN_REFRESH_TIMEOUT_MS, 'TOKEN_REFRESH_TIMEOUT');
 
-  const payload = await response.json().catch(() => ({}));
+  const rawText = await response.text();
+  const payload = parseJsonSafely(rawText, {});
   if (!response.ok || !payload.access_token) {
-    throw new Error(payload.error_description || payload.error || `TOKEN_REFRESH_FAILED_${response.status}`);
+    throw new Error(buildApiErrorMessage('TOKEN_REFRESH_FAILED', response.status, payload, rawText));
   }
 
   const nextParsed = {
@@ -406,20 +430,20 @@ function normalizeWhamUsagePayload(payload) {
 async function fetchWhamJsonForRecord(pathname, record, options = {}) {
   const { persist = false } = options;
   let current = await refreshAccessTokenForRecord(record, { force: false, persist });
-  let response = await fetch(`${CHATGPT_BACKEND_BASE}${pathname}`, {
+  let response = await fetchWithTimeout(`${CHATGPT_BACKEND_BASE}${pathname}`, {
     headers: buildWhamHeaders(current.tokens)
-  });
+  }, USAGE_REQUEST_TIMEOUT_MS, 'USAGE_REQUEST_TIMEOUT');
 
   if (response.status === 401) {
     current = await refreshAccessTokenForRecord(current, { force: true, persist });
-    response = await fetch(`${CHATGPT_BACKEND_BASE}${pathname}`, {
+    response = await fetchWithTimeout(`${CHATGPT_BACKEND_BASE}${pathname}`, {
       headers: buildWhamHeaders(current.tokens)
-    });
+    }, USAGE_REQUEST_TIMEOUT_MS, 'USAGE_REQUEST_TIMEOUT');
   }
 
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(`WHAM_REQUEST_FAILED_${response.status}: ${text.slice(0, 240)}`);
+    throw new Error(buildApiErrorMessage('WHAM_REQUEST_FAILED', response.status, parseJsonSafely(text, null), text));
   }
   return {
     payload: parseJsonSafely(text, null),
@@ -455,126 +479,13 @@ async function getUsageStatusForAuthJson(authJson) {
   return getUsageStatusForRecord(parseAuthRecord(authJson), { persist: false });
 }
 
-async function refreshProfileTokens(body = {}) {
-  if (!body.authJson) throw new Error('AUTH_JSON_REQUIRED');
-  if (body.expectedAccountId) {
-    validateExpectedAccountId(body.authJson, body.expectedAccountId);
-  }
-  if (body.expectedIdentityKey) {
-    validateExpectedIdentityKey(body.authJson, body.expectedIdentityKey);
-  }
-  const refreshed = await refreshAccessTokenForRecord(parseAuthRecord(body.authJson), {
-    force: true,
-    persist: false
-  });
-  return {
-    ok: true,
-    authJson: refreshed.authJson,
-    accountId: refreshed.accountId || null,
-    identityKey: refreshed.identityKey || null,
-    email: refreshed.email || null
-  };
-}
-
-function runCodexProbeCommand(authJson) {
-  return withTemporaryAuthWorkspace(authJson, ({ home, codexHome, workdir }) => new Promise((resolve, reject) => {
-    const outputFile = path.join(workdir, 'last-message.txt');
-    const child = spawn(CODEX_BINARY, [
-      'exec',
-      '--skip-git-repo-check',
-      '--ephemeral',
-      '--color',
-      'never',
-      '-C',
-      workdir,
-      '-o',
-      outputFile,
-      PROBE_PROMPT
-    ], {
-      env: {
-        ...process.env,
-        HOME: home,
-        CODEX_HOME: codexHome,
-        NO_COLOR: '1'
-      },
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
-
-    let stdout = '';
-    let stderr = '';
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      try {
-        child.kill('SIGTERM');
-      } catch (_) {
-        // ignore
-      }
-    }, PROBE_TIMEOUT_MS);
-
-    child.stdout.on('data', (chunk) => {
-      stdout = `${stdout}${chunk}`.slice(-8000);
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr = `${stderr}${chunk}`.slice(-8000);
-    });
-    child.on('error', (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.on('exit', (code, signal) => {
-      clearTimeout(timeout);
-      let lastMessage = '';
-      try {
-        lastMessage = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, 'utf8').trim() : '';
-      } catch (_) {
-        lastMessage = '';
-      }
-      resolve({
-        ok: code === 0 && !timedOut,
-        exitCode: code,
-        signal: signal || null,
-        timedOut,
-        lastMessage,
-        stdoutTail: stdout.trim(),
-        stderrTail: stderr.trim()
-      });
-    });
-  }));
-}
-
-async function probeProfile(body = {}) {
-  if (!body.authJson) throw new Error('AUTH_JSON_REQUIRED');
-  if (body.expectedAccountId) {
-    validateExpectedAccountId(body.authJson, body.expectedAccountId);
-  }
-  if (body.expectedIdentityKey) {
-    validateExpectedIdentityKey(body.authJson, body.expectedIdentityKey);
-  }
-
-  const refreshed = await refreshAccessTokenForRecord(parseAuthRecord(body.authJson), {
-    force: false,
-    persist: false
-  });
-  const probe = await runCodexProbeCommand(refreshed.authJson);
-  return {
-    ok: true,
-    observedAt: nowIso(),
-    authJson: refreshed.authJson,
-    accountId: refreshed.accountId || null,
-    identityKey: refreshed.identityKey || null,
-    email: refreshed.email || null,
-    probe
-  };
-}
-
 function handleActivateProfile(body) {
   const previous = readCurrentAuth();
   saveBackup(previous.authJson);
   try {
     validateExpectedAccountId(body.authJson, body.expectedAccountId || null);
     validateExpectedIdentityKey(body.authJson, body.expectedIdentityKey || null);
-    atomicWriteFile(ACTIVE_AUTH_PATH, body.authJson, sharedAuthWriteOptions());
+    atomicWriteFile(ACTIVE_AUTH_PATH, body.authJson);
     const current = readCurrentAuth();
     return { ok: true, accountId: current.accountId, identityKey: current.identityKey || null };
   } catch (error) {
@@ -607,6 +518,37 @@ function stripAnsi(text) {
   return String(text || '').replace(ANSI_PATTERN, '');
 }
 
+function extractDeviceAuthError(text) {
+  const source = stripAnsi(text);
+  const rateLimitMatch = source.match(/Error logging in with device code:\s*(.+429 Too Many Requests.*)/i)
+    || source.match(/(device code request failed with status 429 Too Many Requests)/i);
+  if (rateLimitMatch) return rateLimitMatch[1].trim();
+  const deviceAuthErrorMatch = source.match(/Error logging in with device code:\s*(.+)/i);
+  if (deviceAuthErrorMatch) return deviceAuthErrorMatch[1].trim();
+  return '';
+}
+
+function deriveDeviceAuthExitError(session, code) {
+  const parsed = extractDeviceAuthError(session.logTail || '');
+  if (parsed) return parsed;
+  if (/device auth timed out after 15 minutes/i.test(session.logTail || '')) {
+    return 'device auth timed out after 15 minutes';
+  }
+  const lines = String(session.logTail || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^Welcome to Codex/i.test(line))
+    .filter((line) => !/^OpenAI's command-line coding agent/i.test(line))
+    .filter((line) => !/^Follow these steps/i.test(line))
+    .filter((line) => !/Never share this code/i.test(line))
+    .filter((line) => !/^https?:\/\//i.test(line))
+    .filter((line) => !/^[12]\./.test(line));
+  if (lines.length) return lines[lines.length - 1];
+  if (code === 1) return 'device auth exited unexpectedly before completing the login flow';
+  return `device-auth exited with code ${code}`;
+}
+
 function parseDeviceAuthOutput(session, chunk) {
   const text = stripAnsi(chunk);
   session.logTail = `${session.logTail}${text}`.slice(-8000);
@@ -620,18 +562,16 @@ function parseDeviceAuthOutput(session, chunk) {
     session.deviceCode = codeMatch[1];
   }
 
-  const rateLimitMatch = text.match(/Error logging in with device code:\s*(.+429 Too Many Requests.*)/i)
-    || text.match(/(device code request failed with status 429 Too Many Requests)/i);
-  if (rateLimitMatch) {
+  const parsedError = extractDeviceAuthError(session.logTail);
+  if (parsedError && /429 Too Many Requests/i.test(parsedError)) {
     session.status = 'failed';
-    session.error = rateLimitMatch[1].trim();
+    session.error = parsedError;
     return;
   }
 
-  const deviceAuthErrorMatch = text.match(/Error logging in with device code:\s*(.+)/i);
-  if (deviceAuthErrorMatch) {
+  if (parsedError) {
     session.status = 'failed';
-    session.error = deviceAuthErrorMatch[1].trim();
+    session.error = parsedError;
     return;
   }
 
@@ -705,12 +645,12 @@ function startDeviceAuthSession(body) {
       session.status = 'success_pending_capture';
     } else {
       session.status = 'failed';
-      session.error = session.error || `device-auth exited with code ${code}`;
+      session.error = session.error || deriveDeviceAuthExitError(session, code);
     }
   });
   child.on('error', (error) => {
     session.status = 'failed';
-    session.error = error.message;
+    session.error = describeThrownError(error);
   });
 
   sessions.set(bootstrapId, session);
@@ -853,33 +793,20 @@ async function handleRequest(req, res) {
       return sendJson(res, 200, await getUsageStatusForAuthJson(body.authJson || ''));
     }
 
-    if (req.method === 'POST' && url.pathname === '/refresh_profile_tokens') {
-      const body = await readBody(req);
-      return sendJson(res, 200, await refreshProfileTokens(body));
-    }
-
-    if (req.method === 'POST' && url.pathname === '/probe_profile') {
-      const body = await readBody(req);
-      return sendJson(res, 200, await probeProfile(body));
-    }
-
     return sendJson(res, 404, { ok: false, error: 'NOT_FOUND' });
   } catch (error) {
-    return sendJson(res, 500, { ok: false, error: error.message });
+    return sendJson(res, 500, { ok: false, error: describeThrownError(error) });
   }
 }
 
 async function startServer() {
   ensureDir(path.dirname(SOCKET_PATH), 0o755);
   ensureDir(BOOTSTRAP_ROOT, 0o700);
-  ensureDir(ACTIVE_CODEX_HOME, 0o700);
-  reconcileSharedAuthPermissions(ACTIVE_AUTH_PATH);
-  reconcileSharedAuthPermissions(getBackupPath());
   if (fs.existsSync(SOCKET_PATH)) fs.unlinkSync(SOCKET_PATH);
 
   serverInstance = http.createServer((req, res) => {
     handleRequest(req, res).catch((error) => {
-      sendJson(res, 500, { ok: false, error: error.message });
+      sendJson(res, 500, { ok: false, error: describeThrownError(error) });
     });
   });
   await new Promise((resolve, reject) => {
@@ -929,8 +856,10 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildApiErrorMessage,
   captureAuthProfile,
   cancelBootstrapSession,
+  describeThrownError,
   handleActivateProfile,
   logoutActiveAuth,
   normalizeWhamUsagePayload,
@@ -943,7 +872,5 @@ module.exports = {
   validateExpectedAccountId,
   validateExpectedIdentityKey,
   getUsageStatus,
-  getUsageStatusForAuthJson,
-  probeProfile,
-  refreshProfileTokens
+  getUsageStatusForAuthJson
 };

@@ -2,12 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-
-process.env.SESSION_SECRET = process.env.SESSION_SECRET || 'test-session-secret-0123456789';
-process.env.CODEX_PROFILE_ENCRYPTION_KEY = process.env.CODEX_PROFILE_ENCRYPTION_KEY || 'test-profile-secret-0123456789';
-process.env.CODEX_AGENT_SHARED_SECRET = process.env.CODEX_AGENT_SHARED_SECRET || 'test-agent-secret-0123456789';
-
 const {
+  buildApiErrorMessage,
+  describeThrownError,
   normalizeWhamUsagePayload,
   parseDeviceAuthOutput,
   validateExpectedAccountId,
@@ -204,10 +201,10 @@ test('buildDuplicateBootstrapMessage reports captured wrong email instead of dup
   assert.equal(
     buildDuplicateBootstrapMessage(
       { email: 'target@example.com' },
-      { email: 'existing@example.com' },
-      { email: 'other@example.com', accountId: 'acct_163' }
+      { email: 'managed@example.com' },
+      { email: 'captured@example.com', accountId: 'acct_163' }
     ),
-    '当前授权得到的是 other@example.com，account_id 为 acct_163，它当前对应的受管账号是 existing@example.com，不是目标账号 target@example.com。系统已刷新新的设备码；请重新打开认证页并使用 target@example.com 完成授权。'
+    '当前授权得到的是 captured@example.com，account_id 为 acct_163，它当前对应的受管账号是 managed@example.com，不是目标账号 target@example.com。系统已自动重置远程认证台并刷新新的设备码；请继续在认证台中登录 target@example.com'
   );
 });
 
@@ -215,9 +212,26 @@ test('buildDuplicateBootstrapMessage explains linked-account collisions without 
   assert.equal(
     buildDuplicateBootstrapMessage(
       { email: 'target@example.com' },
-      { email: 'existing@example.com' },
+      { email: 'managed@example.com' },
       { email: 'target@example.com', accountId: 'acct_shared' }
     ),
-    '当前授权得到的邮箱是 target@example.com，但它返回的 OpenAI account_id acct_shared 已经绑定在 existing@example.com。这通常说明这个登录入口和 existing@example.com 指向同一个 OpenAI 账号；系统已停止自动重试，请确认你要绑定的是一个独立账号。'
+    '当前授权得到的成员身份已经绑定在 managed@example.com，不是目标账号 target@example.com。系统已停止自动重试；如果你本来就是想给 managed@example.com 增加 workspace，请直接在那个账号下新增工作区。'
   );
+});
+
+test('buildApiErrorMessage unwraps object payloads from remote APIs', () => {
+  assert.equal(
+    buildApiErrorMessage('TOKEN_REFRESH_FAILED', 401, {
+      error: {
+        message: 'Your refresh token has already been used to generate a new access token. Please try signing in again.',
+        code: 'refresh_token_reused'
+      }
+    }),
+    'TOKEN_REFRESH_FAILED_401: Your refresh token has already been used to generate a new access token. Please try signing in again. [refresh_token_reused]'
+  );
+});
+
+test('describeThrownError falls back for opaque objects', () => {
+  assert.equal(describeThrownError({ error: { message: 'nested failure' } }), 'nested failure');
+  assert.equal(describeThrownError({}), 'UNKNOWN_AGENT_ERROR');
 });

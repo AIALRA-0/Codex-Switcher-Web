@@ -2,12 +2,14 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-
-process.env.SESSION_SECRET = process.env.SESSION_SECRET || 'test-session-secret-0123456789';
-process.env.CODEX_PROFILE_ENCRYPTION_KEY = process.env.CODEX_PROFILE_ENCRYPTION_KEY || 'test-profile-secret-0123456789';
-process.env.CODEX_AGENT_SHARED_SECRET = process.env.CODEX_AGENT_SHARED_SECRET || 'test-agent-secret-0123456789';
-
-const { encryptString, decryptString, hashToken } = require('../server/security');
+const {
+  decryptString,
+  decryptWithPassphrase,
+  encryptString,
+  encryptWithPassphrase,
+  generatePortablePassphrase,
+  hashToken
+} = require('../server/security');
 
 test('encryptString and decryptString round-trip auth payload', () => {
   const payload = JSON.stringify({
@@ -24,4 +26,20 @@ test('encryptString and decryptString round-trip auth payload', () => {
 
 test('hashToken is deterministic for identical values', () => {
   assert.equal(hashToken('browser-token'), hashToken('browser-token'));
+});
+
+test('encryptWithPassphrase and decryptWithPassphrase round-trip portable payload', () => {
+  const envelope = encryptWithPassphrase(JSON.stringify({
+    schema_version: 'codex-switcher-export-v1',
+    accounts: [{ email: 'demo@example.com' }]
+  }), 'passphrase-123');
+  const decrypted = decryptWithPassphrase(envelope, 'passphrase-123');
+  const parsed = JSON.parse(decrypted);
+  assert.equal(parsed.schema_version, 'codex-switcher-export-v1');
+  assert.equal(parsed.accounts[0].email, 'demo@example.com');
+});
+
+test('generatePortablePassphrase returns short clipboard-friendly tokens', () => {
+  const passphrase = generatePortablePassphrase(10);
+  assert.match(passphrase, /^[A-Z2-9]{5}-[A-Z2-9]{5}$/);
 });

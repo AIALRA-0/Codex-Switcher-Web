@@ -4,21 +4,37 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Codex Switcher</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260325-5" />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260405-7" />
   </head>
   <body class="is-login-mode">
     <div class="app-shell">
       <header class="app-header">
         <div>
-          <p class="eyebrow" id="appEyebrow">Codex Account Console</p>
-          <h1 id="appTitle">Codex 账号管理</h1>
+          <p class="eyebrow">Codex Account Console</p>
+          <h1>Codex 账号管理</h1>
         </div>
         <div class="app-header__actions">
-          <button id="languageToggleBtn" class="ghost" type="button">语言：中文</button>
-          <button id="timeDisplayToggleBtn" class="ghost hidden" type="button">时间显示：服务器</button>
-          <button id="accountPrivacyToggleBtn" class="ghost hidden" type="button">账号隐私：关</button>
-          <div class="session-badge" id="sessionBadge">未登录</div>
-          <button id="logoutBtn" class="danger hidden" type="button">退出后台</button>
+          <div class="app-header__account-row">
+            <div class="session-badge" id="sessionBadge">未登录</div>
+            <button id="logoutBtn" class="danger hidden" type="button">退出后台</button>
+          </div>
+          <div class="app-header__settings-row">
+            <button id="timeDisplayToggleBtn" class="ghost hidden" type="button">时间显示：服务器</button>
+            <button id="accountPrivacyToggleBtn" class="ghost hidden" type="button">账号隐私：关</button>
+            <button id="autoSwitchToggleBtn" class="ghost hidden" type="button">自动切换：关</button>
+            <div id="refreshControlHost" class="header-refresh-control hidden">
+              <select id="refreshIntervalSelect" aria-label="自动刷新频率">
+                <option value="0">自动刷新：关闭</option>
+                <option value="10">自动刷新：10 秒</option>
+                <option value="30">自动刷新：30 秒</option>
+                <option value="60">自动刷新：60 秒</option>
+                <option value="custom">自动刷新：自定义</option>
+              </select>
+              <input id="refreshCustomInput" class="hidden" type="number" min="5" max="600" step="1" value="10" inputmode="numeric" aria-label="自定义自动刷新秒数" />
+            </div>
+            <button id="exchangeModalToggleBtn" class="ghost hidden" type="button">导入/导出配置</button>
+          </div>
         </div>
       </header>
 
@@ -26,20 +42,20 @@
         <section class="panel auth-panel" id="loginPanel">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow" id="loginEyebrow">Admin Access</p>
-              <h2 id="loginTitle">管理员登录</h2>
+              <p class="eyebrow">Admin Access</p>
+              <h2>管理员登录</h2>
             </div>
           </div>
           <form id="loginForm" class="login-form">
             <label>
-              <span id="loginEmailLabel">管理员账号</span>
-              <input id="loginEmail" name="admin_email" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" data-bwignore="true" data-1p-ignore="true" data-lpignore="true" required />
+              <span>邮箱</span>
+              <input id="loginEmail" name="admin_email" type="email" autocomplete="username" autocapitalize="off" spellcheck="false" data-bwignore="true" data-1p-ignore="true" data-lpignore="true" required />
             </label>
             <label>
-              <span id="loginPasswordLabel">密码</span>
+              <span>密码</span>
               <input id="loginPassword" name="admin_password" type="password" autocomplete="current-password" data-bwignore="true" data-1p-ignore="true" data-lpignore="true" required />
             </label>
-            <button id="loginSubmitBtn" type="submit" class="primary">登录</button>
+            <button type="submit" class="primary">登录</button>
           </form>
         </section>
 
@@ -47,58 +63,27 @@
           <section class="panel">
             <div class="topbar">
               <div>
-                <h2 id="dashboardTitle">管理台</h2>
-                <p class="muted" id="runtimeTimestamp">等待数据...</p>
+                <h2>管理台</h2>
               </div>
               <div class="topbar-note">
-                <div id="autoRefreshNote">打开页面会立即刷新，页面保持打开时每 30 秒刷新一次</div>
-                <div class="dashboard-settings">
-                  <label class="dashboard-setting">
-                    <span id="refreshIntervalLabel">刷新间隔</span>
-                    <select id="refreshIntervalSelect">
-                      <option value="10000">10s</option>
-                      <option value="30000">30s</option>
-                      <option value="60000">60s</option>
-                      <option value="120000">120s</option>
-                    </select>
-                  </label>
-                  <label class="dashboard-setting">
-                    <span id="probeModeLabel">自动检测</span>
-                    <select id="probeModeSelect">
-                      <option value="1">开启</option>
-                      <option value="0">关闭</option>
-                    </select>
-                  </label>
-                  <label class="dashboard-setting">
-                    <span id="probeIntervalLabel">检测间隔</span>
-                    <select id="probeIntervalSelect">
-                      <option value="300000">5m</option>
-                      <option value="900000">15m</option>
-                      <option value="1800000">30m</option>
-                      <option value="3600000">60m</option>
-                    </select>
-                  </label>
-                </div>
+                <div id="autoRefreshNote">刷新日志：等待首次快照...</div>
+                <button id="manualRefreshBtn" class="secondary" type="button">立即刷新</button>
               </div>
             </div>
 
             <div class="guide-strip">
-              <span class="guide-step" id="guideStepSave">保存资料</span>
-              <span class="guide-step" id="guideStepAuth">认证账号</span>
-              <span class="guide-step" id="guideStepSwitch">切换使用</span>
-              <span class="guide-step" id="guideStepLogout">退出留存</span>
+              <span class="guide-step">保存资料</span>
+              <span class="guide-step">认证账号</span>
+              <span class="guide-step">切换使用</span>
+              <span class="guide-step">退出留存</span>
             </div>
-
-            <div id="workspaceGuideHost"></div>
-            <div id="driftBannerHost"></div>
 
             <div class="summary-grid" id="summaryGrid"></div>
 
             <div class="active-section">
               <div class="section-head">
                 <div>
-                  <h3 id="activeSectionTitle">当前使用</h3>
-                  <p class="muted" id="activeSectionHint">只有点击“切换”时，code-server 的 Codex 才会换号</p>
+                  <h3>当前使用</h3>
                 </div>
                 <div class="inline-badge" id="quotaSourceBadge">等待同步</div>
               </div>
@@ -109,16 +94,46 @@
           <article class="panel accounts-panel">
             <div class="section-head">
               <div>
-                <h3 id="accountsSectionTitle">账号列表</h3>
-                <p class="muted" id="accountsSectionHint">每个账号都独立管理；先保存资料，再创建认证任务，然后打开认证页完成授权</p>
+                <h3>账号列表</h3>
               </div>
               <div class="section-caption" id="accountsSummaryText"></div>
             </div>
             <div class="accounts-workspace">
               <aside class="account-index-panel">
                 <div class="account-index-toolbar">
-                  <strong id="accountIndexTitle">账号索引</strong>
+                  <strong>账号索引</strong>
                   <button id="createAccountBtn" class="primary hidden" type="button">新建账号</button>
+                </div>
+                <div class="account-index-filters">
+                  <div class="account-index-search-row">
+                    <input id="accountSearchInput" type="search" placeholder="搜索邮箱 / workspace / account_id / identity_key" aria-label="搜索账号" />
+                  </div>
+                  <div class="account-index-meta-row">
+                    <select id="accountSortSelect" aria-label="排序方式">
+                      <option value="availability">排序：默认可用性</option>
+                      <option value="quota_5h">排序：5h 剩余额度</option>
+                      <option value="quota_7d">排序：7d 剩余额度</option>
+                      <option value="name_asc">排序：字母 A-Z</option>
+                      <option value="name_desc">排序：字母 Z-A</option>
+                      <option value="expiry">排序：即将到期</option>
+                    </select>
+                    <select id="accountFilterSelect" aria-label="过滤条件">
+                      <option value="all">过滤：全部</option>
+                      <option value="available">过滤：可用</option>
+                      <option value="pending">过滤：认证中</option>
+                      <option value="unauth">过滤：待认证</option>
+                      <option value="error">过滤：异常</option>
+                      <option value="active">过滤：当前活跃</option>
+                    </select>
+                    <select id="accountLoginMethodFilterSelect" aria-label="登录方式过滤">
+                      <option value="all">登录方式：全部</option>
+                      <option value="email">登录方式：邮箱</option>
+                      <option value="google">登录方式：Google</option>
+                      <option value="apple">登录方式：Apple</option>
+                      <option value="microsoft">登录方式：Microsoft</option>
+                      <option value="phone">登录方式：手机</option>
+                    </select>
+                  </div>
                 </div>
                 <div id="accountIndexList" class="account-index-list"></div>
               </aside>
@@ -131,14 +146,14 @@
           <article class="panel log-panel">
             <div class="section-head">
               <div>
-                <h3 id="logsSectionTitle">最近记录</h3>
-                <p class="muted" id="logsSectionHint">这里只保留最近的切换与额度同步记录</p>
+                <h3>最近记录</h3>
+                <p class="muted">这里只保留最近的切换与额度同步记录</p>
               </div>
             </div>
             <div class="logs-grid">
               <div class="log-column">
                 <div class="log-toolbar">
-                  <h4 class="log-title" id="switchLogsTitle">切换记录</h4>
+                  <h4 class="log-title">切换记录</h4>
                   <div class="log-toolbar__actions">
                     <button id="clearSwitchLogsBtn" type="button" class="ghost danger">清除</button>
                   </div>
@@ -156,7 +171,7 @@
               </div>
               <div class="log-column">
                 <div class="log-toolbar">
-                  <h4 class="log-title" id="sampleLogsTitle">额度快照</h4>
+                  <h4 class="log-title">额度快照</h4>
                   <div class="log-toolbar__actions">
                     <button id="clearSampleLogsBtn" type="button" class="ghost danger">清除</button>
                   </div>
@@ -190,64 +205,151 @@
           </div>
           <div class="account-header-actions">
             <span class="account-badge"></span>
-            <span class="status-pill account-subscription"></span>
-            <button type="button" class="ghost header-logout logout-account">退出</button>
-            <button type="button" class="danger delete-account">删除</button>
+          </div>
+        </div>
+        <div class="account-stage-row">
+          <div class="account-stage-strip"></div>
+          <div class="account-stage-actions">
+            <button type="button" class="danger header-logout logout-account">退出</button>
+            <button type="button" class="danger delete-account">删除账号</button>
           </div>
         </div>
 
-        <div class="account-stage-strip"></div>
-
-        <div class="detail-summary">
-          <div class="detail-summary__item">
-            <span class="detail-summary-email-label">邮箱名称</span>
-            <strong class="detail-email-title"></strong>
+        <section class="account-shared-panel">
+          <div class="account-shared-panel__head">
+            <div>
+              <h5>共享账号资料</h5>
+              <p class="muted">邮箱名称、邮箱、登录方式和订阅到期日由整个账号共享，下面每个工作区会独立显示自己的认证、切换和额度。</p>
+            </div>
           </div>
-          <div class="detail-summary__item">
-            <span class="detail-summary-state-label">当前状态</span>
-            <strong class="detail-state-text"></strong>
+          <div class="detail-summary">
+            <div class="detail-summary__item">
+              <span>邮箱名称</span>
+              <strong class="detail-email-title"></strong>
+            </div>
+            <div class="detail-summary__item">
+              <span>当前状态</span>
+              <strong class="detail-state-text"></strong>
+            </div>
           </div>
-        </div>
 
-        <div class="field-grid field-grid--detail">
-          <label>
-            <span class="field-label-email">邮箱</span>
-            <input data-field="email" name="account_email" type="email" autocomplete="off" autocapitalize="off" spellcheck="false" data-bwignore="true" data-1p-ignore="true" data-lpignore="true" />
-          </label>
-          <label>
-            <span class="field-label-login-method">登录方式</span>
-            <select data-field="login_method" name="login_method" autocomplete="off" data-bwignore="true" data-1p-ignore="true" data-lpignore="true">
-              <option value="email">邮箱</option>
-              <option value="google">Google</option>
-            </select>
-          </label>
-          <label>
-            <span class="field-label-expires-at">订阅到期日</span>
-            <input data-field="expires_at" name="expires_at" type="date" autocomplete="off" data-bwignore="true" data-1p-ignore="true" data-lpignore="true" />
-          </label>
-        </div>
+          <div class="field-grid field-grid--detail">
+            <label>
+              <span>邮箱</span>
+              <input data-field="email" name="account_email" type="email" autocomplete="off" autocapitalize="off" spellcheck="false" data-bwignore="true" data-1p-ignore="true" data-lpignore="true" />
+            </label>
+            <label>
+              <span>登录方式</span>
+              <select data-field="login_method" name="login_method" autocomplete="off" data-bwignore="true" data-1p-ignore="true" data-lpignore="true">
+                <option value="email">邮箱</option>
+                <option value="google">Google</option>
+                <option value="apple">Apple</option>
+                <option value="microsoft">Microsoft</option>
+                <option value="phone">手机</option>
+              </select>
+            </label>
+            <label>
+              <span>订阅到期日</span>
+              <input data-field="expires_at" name="expires_at" type="date" autocomplete="off" data-bwignore="true" data-1p-ignore="true" data-lpignore="true" />
+            </label>
+          </div>
 
           <div class="account-toolbar">
             <div class="flow-hint muted"></div>
             <div class="action-row">
               <button type="button" class="secondary save-account">保存</button>
-              <button type="button" class="secondary bootstrap-account">认证</button>
-              <button type="button" class="ghost test-account">检测</button>
-              <button type="button" class="primary switch-account">切换</button>
             </div>
           </div>
+        </section>
 
-          <div class="account-auth-progress"></div>
-
-        <div class="account-bottom">
-          <div class="quota-panel"></div>
-          <div class="meta-grid"></div>
-        </div>
+        <div class="workspace-panels-host"></div>
+        <div class="auth-profile-create-host"></div>
       </article>
     </template>
 
     <div id="toastViewport" class="toast-viewport" aria-live="polite" aria-atomic="true"></div>
 
-    <script src="/assets/app.js?v=20260325-5" defer></script>
+    <div id="exchangeModal" class="exchange-modal" aria-hidden="true">
+      <div class="exchange-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="exchangeModalTitle">
+        <div class="exchange-modal__header">
+          <div>
+            <h3 id="exchangeModalTitle">导入/导出配置</h3>
+            <p class="muted">导出时会使用短口令加密，口令在弹层关闭、使用完成或超时后自动销毁</p>
+          </div>
+          <button id="exchangeModalCloseBtn" class="ghost" type="button">关闭</button>
+        </div>
+        <div id="exchangeStatusBox" class="exchange-modal__status hidden" aria-live="polite"></div>
+        <form id="exchangeModalForm" class="exchange-modal__body" autocomplete="off">
+          <input
+            class="visually-hidden"
+            type="text"
+            name="exchange_username_hint"
+            autocomplete="username"
+            tabindex="-1"
+            aria-hidden="true"
+          />
+          <section class="exchange-modal__card">
+            <div class="exchange-modal__section-head">
+              <h4>交换口令</h4>
+              <p class="muted" id="exchangePassphraseMeta">可手动输入已有口令，或点击生成后在 60 秒内使用</p>
+            </div>
+            <div class="exchange-modal__passphrase-row">
+              <input
+                id="exchangePassphraseInput"
+                name="exchange_passphrase"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                data-bwignore="true"
+                data-1p-ignore="true"
+                data-lpignore="true"
+                placeholder="输入或生成导入/导出共用口令"
+                aria-label="交换口令"
+              />
+              <button id="exchangeGenerateBtn" class="secondary" type="button">生成口令</button>
+              <button id="exchangeCopyBtn" class="ghost" type="button">复制口令</button>
+            </div>
+          </section>
+          <div class="exchange-modal__grid">
+            <section class="exchange-modal__card">
+              <div class="exchange-modal__section-head">
+                <h4>导出配置</h4>
+                <p class="muted">导出文件使用当前口令加密，导入时需要同一口令</p>
+              </div>
+              <button id="exportExchangeBtn" class="primary" type="button">导出加密配置</button>
+            </section>
+            <section class="exchange-modal__card">
+              <div class="exchange-modal__section-head">
+                <h4>导入配置</h4>
+                <p class="muted">先输入交换口令，再选择策略并导入 JSON 交换文件</p>
+              </div>
+              <label class="exchange-modal__field">
+                <span>导入口令</span>
+                <input
+                  id="exchangeImportPassphraseInput"
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  data-bwignore="true"
+                  data-1p-ignore="true"
+                  data-lpignore="true"
+                  placeholder="粘贴导出时使用的交换口令"
+                  aria-label="导入口令"
+                />
+              </label>
+              <select id="exchangeImportStrategySelect" aria-label="导入策略">
+                <option value="merge">导入策略：合并</option>
+                <option value="replace">导入策略：覆盖</option>
+                <option value="skip">导入策略：跳过冲突</option>
+              </select>
+              <input id="exchangeFileInput" class="hidden" type="file" accept="application/json,.json" />
+              <button id="importExchangeBtn" class="secondary" type="button">导入加密配置</button>
+            </section>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script src="/assets/app.js?v=20260405-7" defer></script>
   </body>
 </html>

@@ -3,6 +3,25 @@
 const http = require('http');
 const { config } = require('./config');
 
+function normalizeAgentErrorValue(value) {
+  if (typeof value === 'string') return value.trim();
+  if (value == null) return '';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    return normalizeAgentErrorValue(value.error)
+      || normalizeAgentErrorValue(value.message)
+      || normalizeAgentErrorValue(value.code)
+      || (() => {
+        try {
+          return JSON.stringify(value);
+        } catch (_) {
+          return String(value);
+        }
+      })();
+  }
+  return String(value).trim();
+}
+
 function requestAgent(method, pathname, body) {
   return new Promise((resolve, reject) => {
     const payload = body ? Buffer.from(JSON.stringify(body), 'utf8') : null;
@@ -27,12 +46,16 @@ function requestAgent(method, pathname, body) {
           return reject(new Error(`Agent returned invalid JSON: ${error.message}`));
         }
         if (res.statusCode >= 400 || json.ok === false) {
-          const message = json.error || `Agent request failed (${res.statusCode})`;
+          const message = normalizeAgentErrorValue(json.error) || `Agent request failed (${res.statusCode})`;
           return reject(new Error(message));
         }
         resolve(json);
       });
     });
+    const timeout = setTimeout(() => {
+      req.destroy(new Error('AGENT_REQUEST_TIMEOUT'));
+    }, Math.max(1000, config.agentRequestTimeoutMs || 5000));
+    req.on('close', () => clearTimeout(timeout));
     req.on('error', reject);
     if (payload) req.write(payload);
     req.end();
@@ -75,14 +98,6 @@ function getUsageForProfile(input) {
   return requestAgent('POST', '/usage_for_profile', input);
 }
 
-function refreshProfileTokens(input) {
-  return requestAgent('POST', '/refresh_profile_tokens', input);
-}
-
-function probeProfile(input) {
-  return requestAgent('POST', '/probe_profile', input);
-}
-
 function logoutActiveAuth() {
   return requestAgent('POST', '/logout_active_auth', {});
 }
@@ -118,8 +133,6 @@ module.exports = {
   captureAuthProfile,
   getBootstrapStatus,
   getLoginStatus,
-  probeProfile,
-  refreshProfileTokens,
   getUsageForProfile,
   getUsageStatus,
   logoutActiveAuth,
