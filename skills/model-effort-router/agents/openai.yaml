@@ -1,0 +1,4 @@
+interface:
+  display_name: "Next-Iteration Model Router"
+  short_description: "为下一轮代理任务推荐模型、推理档位与升级门"
+  default_prompt: "Use $model-effort-router to classify the next iteration and return one primary route, up to two alternatives, and evidence-based escalation gates."
